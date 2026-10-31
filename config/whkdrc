@@ -1,0 +1,60 @@
+.shell cmd
+
+# ---- Keybinds (mod = Alt; Win is reserved by Windows). Edit them with Alt+K. ----
+
+# Apps / session  (alt + shift + o reloads these keybinds)
+alt + return              : wt
+alt + w                   : komorebic close
+alt + shift + o           : taskkill /f /im whkd.exe >nul & start "" /b whkd
+alt + shift + p           : komorebic toggle-pause
+alt + k                   : komorebi-tray.exe --shortcuts
+alt + space               : komorebi-tray.exe --apps
+
+# Window state
+alt + t                   : komorebic toggle-float
+alt + f                   : komorebic toggle-monocle
+alt + shift + f           : komorebic toggle-maximize
+alt + j                   : komorebic flip-layout horizontal
+alt + shift + j           : komorebic flip-layout vertical
+
+# Focus
+alt + left                : komorebic focus left
+alt + right               : komorebic focus right
+alt + up                  : komorebic focus up
+alt + down                : komorebic focus down
+
+# Swap / move window
+alt + shift + left        : komorebic move left
+alt + shift + right       : komorebic move right
+alt + shift + up          : komorebic move up
+alt + shift + down        : komorebic move down
+alt + shift + return      : komorebi-tray.exe --browser
+
+# Resize
+alt + ctrl + left         : komorebic resize-axis horizontal decrease
+alt + ctrl + right        : komorebic resize-axis horizontal increase
+alt + ctrl + up           : komorebic resize-axis vertical increase
+alt + ctrl + down         : komorebic resize-axis vertical decrease
+
+# Layouts
+alt + b                   : komorebic change-layout bsp
+alt + c                   : komorebi-tray.exe --settings
+alt + shift + c           : komorebic change-layout columns
+alt + g                   : komorebic change-layout grid
+alt + v                   : komorebic change-layout vertical-stack
+
+# Workspaces
+alt + 1                   : komorebic focus-workspace 0
+alt + 2                   : komorebic focus-workspace 1
+alt + 3                   : komorebic focus-workspace 2
+alt + 4                   : komorebic focus-workspace 3
+alt + 5                   : komorebic focus-workspace 4
+alt + shift + 1           : komorebic move-to-workspace 0
+alt + shift + 2           : komorebic move-to-workspace 1
+alt + shift + 3           : komorebic move-to-workspace 2
+alt + shift + 4           : komorebic move-to-workspace 3
+alt + shift + 5           : komorebic move-to-workspace 4
+
+# Monitors
+alt + oem_period          : komorebic cycle-monitor next
+alt + shift + oem_period  : komorebic cycle-move-to-monitor next

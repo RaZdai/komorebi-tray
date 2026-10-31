@@ -1,0 +1,67 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LGUG2Z/komorebi/master/schema.json",
+  "app_specific_configuration_path": "$Env:KOMOREBI_CONFIG_HOME/applications.json",
+  "window_hiding_behaviour": "Cloak",
+  "cross_monitor_move_behaviour": "Insert",
+  "mouse_follows_focus": false,
+  "floating_applications": [
+    {
+      "kind": "Exe",
+      "id": "(?i)^komorebi-tray(-setup)?\\.exe$",
+      "matching_strategy": "Regex"
+    }
+  ],
+  "transparency_ignore_rules": [
+    {
+      "kind": "Exe",
+      "id": "(?i)^komorebi-tray(-setup)?\\.exe$",
+      "matching_strategy": "Regex"
+    }
+  ],
+  "default_workspace_padding": 14,
+  "default_container_padding": 8,
+  "border": true,
+  "border_implementation": "Komorebi",
+  "border_style": "Rounded",
+  "border_width": 3,
+  "border_offset": -1,
+  "border_colours": {
+    "single": "#C04517",
+    "stack": "#00ff99",
+    "monocle": "#c678dd",
+    "floating": "#e5c07b",
+    "unfocused": "#3b3b3b"
+  },
+  "transparency": true,
+  "transparency_alpha": 235,
+  "animation": {
+    "enabled": true,
+    "duration": {
+      "movement": 200,
+      "transparency": 120
+    },
+    "fps": 120,
+    "style": {
+      "movement": "EaseOutQuart",
+      "transparency": "EaseOutSine"
+    }
+  },
+  "monitors": [
+    {
+      "workspaces": [
+        { "name": "1", "layout": "BSP" },
+        { "name": "2", "layout": "BSP" },
+        { "name": "3", "layout": "BSP" },
+        { "name": "4", "layout": "BSP" },
+        { "name": "5", "layout": "BSP" }
+      ]
+    },
+    {
+      "workspaces": [
+        { "name": "6", "layout": "BSP" },
+        { "name": "7", "layout": "BSP" },
+        { "name": "8", "layout": "BSP" }
+      ]
+    }
+  ]
+}
