@@ -66,6 +66,7 @@ namespace KomorebiTray
         public static readonly string Log = Path.Combine(ConfigDir, "tray.log");
         public static readonly string Icon = IconPath();
         public static readonly string Config = Path.Combine(ConfigDir, "komorebi.json");
+        public static readonly string TraySettings = Path.Combine(ConfigDir, "komorebi-tray.json");
 
         // The installer puts the icon next to the exe; older setups kept it in the config folder
         static string IconPath()
@@ -130,6 +131,7 @@ namespace KomorebiTray
         }
 
         public const string ElevatedTask = "komorebi (elevated)";
+        public const string ElevatedStopTask = "komorebi (elevated stop)";
 
         // true when the elevated task ran; false (task missing or refused) means: start komorebi normally
         public static bool StartElevatedKomorebi()
@@ -1777,6 +1779,89 @@ namespace KomorebiTray
         }
     }
 
+    // Optional: the focused-window border follows the Windows accent colour (Settings → Personalization → Colors).
+    // The choice lives in komorebi-tray.json (komorebi.json only takes komorebi's own keys). The colour itself is
+    // written into komorebi.json, so komorebi starts with it, and the colour it replaced is kept for switching back.
+    static class AccentBorder
+    {
+        public const string FollowKey = "border_follows_accent";
+        const string BeforeKey = "border_colour_before_accent", ColourPath = "border_colours.single";
+
+        public static Dictionary<string, object> LoadPrefs()
+        {
+            try { if (File.Exists(Paths.TraySettings)) return Json.Parse(File.ReadAllText(Paths.TraySettings)); }
+            catch (Exception e) { Log.Write("tray settings: " + e.Message); }
+            return new Dictionary<string, object>();
+        }
+
+        public static void SavePrefs(Dictionary<string, object> prefs)
+        {
+            try { File.WriteAllText(Paths.TraySettings, Json.Write(prefs), new UTF8Encoding(false)); }
+            catch (Exception e) { Log.Write("tray settings save: " + e.Message); }
+        }
+
+        public static bool Follows(Dictionary<string, object> prefs)
+        {
+            object v;
+            return prefs.TryGetValue(FollowKey, out v) && Convert.ToBoolean(v);
+        }
+
+        // AccentColor is stored as 0xAABBGGRR
+        public static string Hex()
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\DWM"))
+                {
+                    object v = k == null ? null : k.GetValue("AccentColor");
+                    if (v is int)
+                    {
+                        int abgr = (int)v;
+                        return string.Format("#{0:X2}{1:X2}{2:X2}", abgr & 0xFF, (abgr >> 8) & 0xFF, (abgr >> 16) & 0xFF);
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        // Brings cfg in line with the preference (following: accent; not following: the colour from before). True when cfg changed.
+        public static bool Apply(Dictionary<string, object> cfg, Dictionary<string, object> prefs)
+        {
+            string current = Json.Get(cfg, ColourPath) as string;
+            if (Follows(prefs))
+            {
+                string hex = Hex();
+                if (hex == null || string.Equals(current, hex, StringComparison.OrdinalIgnoreCase)) return false;
+                if (!prefs.ContainsKey(BeforeKey) && current != null) prefs[BeforeKey] = current;
+                Json.Set(cfg, ColourPath, hex);
+                return true;
+            }
+            object before;
+            if (!prefs.TryGetValue(BeforeKey, out before)) return false;
+            prefs.Remove(BeforeKey);
+            Json.Set(cfg, ColourPath, before);
+            return true;
+        }
+
+        // For the tray (start-up, Windows colour changes): true when komorebi.json changed, so a running komorebi needs a reload
+        public static bool Sync()
+        {
+            var prefs = LoadPrefs();
+            if (!Follows(prefs)) return false;   // switching it off happens in the settings screen
+            try
+            {
+                var cfg = Json.Parse(File.ReadAllText(Paths.Config));
+                if (!Apply(cfg, prefs)) return false;
+                File.WriteAllText(Paths.Config, Json.Write(cfg), new UTF8Encoding(false));
+                SavePrefs(prefs);
+                Log.Write("border follows the Windows accent: " + Json.Get(cfg, ColourPath));
+                return true;
+            }
+            catch (Exception e) { Log.Write("accent border: " + e.Message); return false; }
+        }
+    }
+
     class Setting
     {
         public string Group, Label, Description, Path, Kind;   // Kind: bool | int | enum | color
@@ -1785,6 +1870,7 @@ namespace KomorebiTray
         public string Unit = "";
         public object Default;
         public string DependsOn;    // dimmed while this boolean path is off
+        public string DisabledBy;   // dimmed while this boolean path is on
     }
 
     static class SettingCatalog
@@ -1812,6 +1898,7 @@ namespace KomorebiTray
             var s = S(g, "enum", label, desc, path, def); s.Options = opts; return s;
         }
         static Setting D(Setting s, string dependsOn) { s.DependsOn = dependsOn; return s; }
+        static Setting Off(Setting s, string disabledBy) { s.DisabledBy = disabledBy; return s; }
 
         // Defaults are komorebi's own (from its schema), shown when a key isn't in the file yet
         public static List<Setting> For(Dictionary<string, object> cfg)
@@ -1826,7 +1913,8 @@ namespace KomorebiTray
                 D(N("Borders", "Offset", "Push the outline outwards (+) or inwards (−)", "border_offset", -1, -10, 20, 1, " px"), "border"),
                 D(E("Borders", "Corners", "Shape of the outline's corners", "border_style", "System", new[] { "System", "Rounded", "Square" }), "border"),
                 D(E("Borders", "Drawn by", "Komorebi's own outline, or Windows' thin native one", "border_implementation", "Komorebi", new[] { "Komorebi", "Windows" }), "border"),
-                D(S("Borders", "color", "Focused window", "Outline of the window you're working in", "border_colours.single", "#42A5F5"), "border"),
+                D(S("Borders", "bool", "Match Windows accent", "Focused outline uses your Windows accent colour", "tray." + AccentBorder.FollowKey, false), "border"),
+                Off(D(S("Borders", "color", "Focused window", "Outline of the window you're working in", "border_colours.single", "#42A5F5"), "border"), "tray." + AccentBorder.FollowKey),
                 D(S("Borders", "color", "Other windows", "Outline of every other tiled window", "border_colours.unfocused", "#808080"), "border"),
                 D(S("Borders", "color", "Floating windows", "Outline of windows floating above the tiles", "border_colours.floating", "#F5F5F5"), "border"),
                 D(S("Borders", "color", "Stacked windows", "Outline when several windows share one tile", "border_colours.stack", "#00A542"), "border"),
@@ -1872,6 +1960,7 @@ namespace KomorebiTray
         public enum Mode { Browse, Pick, Input }
 
         readonly Dictionary<string, object> cfg;
+        readonly Dictionary<string, object> prefs = AccentBorder.LoadPrefs();
         readonly List<Setting> all;
         readonly TextBox search = new TextBox();
         readonly Label hint = new Label();
@@ -1939,11 +2028,29 @@ namespace KomorebiTray
 
         // ---- values
 
-        public object Value(Setting s) { return Json.Get(cfg, s.Path) ?? s.Default; }
+        // "tray.*" paths are the tray's own preferences (komorebi-tray.json), everything else is komorebi.json
+        object Raw(string path)
+        {
+            if (!path.StartsWith("tray.")) return Json.Get(cfg, path);
+            object v;
+            return prefs.TryGetValue(path.Substring(5), out v) ? v : null;
+        }
+
+        public object Value(Setting s)
+        {
+            // While following the accent, show the colour the border will actually get
+            if (s.DisabledBy != null && s.Path == "border_colours.single" && Convert.ToBoolean(Raw(s.DisabledBy) ?? false))
+                return AccentBorder.Hex() ?? Raw(s.Path) ?? s.Default;
+            return Raw(s.Path) ?? s.Default;
+        }
         public bool Bool(Setting s) { return Convert.ToBoolean(Value(s)); }
         public int Int(Setting s) { return Convert.ToInt32(Value(s)); }
         public string Str(Setting s) { return Convert.ToString(Value(s)); }
-        public bool IsActive(Setting s) { return s.DependsOn == null || Convert.ToBoolean(Json.Get(cfg, s.DependsOn) ?? false); }
+        public bool IsActive(Setting s)
+        {
+            if (s.DependsOn != null && !Convert.ToBoolean(Raw(s.DependsOn) ?? false)) return false;
+            return s.DisabledBy == null || !Convert.ToBoolean(Raw(s.DisabledBy) ?? false);
+        }
 
         public string Display(Setting s)
         {
@@ -1965,7 +2072,8 @@ namespace KomorebiTray
         public void Change(Setting s, object value)
         {
             if (Equals(Value(s), value)) return;
-            Json.Set(cfg, s.Path, value);
+            if (s.Path.StartsWith("tray.")) prefs[s.Path.Substring(5)] = value;
+            else Json.Set(cfg, s.Path, value);
             changed = true;
             UpdateHint();
             view.Invalidate();
@@ -2163,8 +2271,10 @@ namespace KomorebiTray
             if (loadError != null) return;   // never overwrite a file we couldn't read
             try
             {
+                AccentBorder.Apply(cfg, prefs);
                 File.Copy(Paths.Config, Paths.Config + ".bak", true);
                 File.WriteAllText(Paths.Config, Json.Write(cfg), new UTF8Encoding(false));
+                AccentBorder.SavePrefs(prefs);
                 changed = false;
                 Saved = true;
                 Run.K("reload-configuration");
@@ -2779,6 +2889,7 @@ namespace KomorebiTray
             menu.Items.Add("Quit (stop komorebi + tray)", null, (s, e) =>
             {
                 quitting = true;
+                Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnPreferenceChanged;
                 hotkeys.Clear();
                 Run.K("stop", 5000);
                 WaitForKomorebiExit();
@@ -2793,7 +2904,7 @@ namespace KomorebiTray
                 toggle.Text = stopped ? "Start everything" : "Stop everything";
                 // Stopped means everything: only Start, Quit and the config folder stay usable
                 retile.Enabled = reload.Enabled = shortcutsItem.Enabled = appsItem.Enabled = settingsItem.Enabled = !stopped;
-                toggle.Enabled = editor == null;
+                toggle.Enabled = editor == null && !busy;
             };
             menu.Closed += (s, e) => { if (editor == null && apps == null && settingsWin == null) Native.Trim(); };
 
@@ -2806,8 +2917,11 @@ namespace KomorebiTray
 
             // whkd is no longer needed: the tray owns the hotkeys now
             Run.KillAll("whkd");
-            if (!Run.IsRunning("komorebi")) StartKomorebi(); else Watch();
+            if (!Run.IsRunning("komorebi")) StartKomorebi();
+            else { if (AccentBorder.Sync()) Run.K("reload-configuration"); Watch(); }
             LoadHotkeys(false);
+            // Windows broadcasts a setting change when the accent colour changes
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnPreferenceChanged;
             Log.Write("running");
             if (openShortcuts) invoker.BeginInvoke((MethodInvoker)OpenEditor);
             if (openApps) invoker.BeginInvoke((MethodInvoker)ToggleApps);
@@ -2869,6 +2983,7 @@ namespace KomorebiTray
         // rights, so apps it launches (Alt+Space, browser, terminal) don't inherit admin.
         void StartKomorebi()
         {
+            AccentBorder.Sync();
             WindowFixer.ClearKomorebiTransparency();
             if (!Run.StartElevatedKomorebi()) Run.K("start --clean-state");
             Watch();
@@ -2931,7 +3046,7 @@ namespace KomorebiTray
         void OnKomorebiExited()
         {
             Unwatch();
-            if (stopped || quitting) return;            // our own stop already cleaned up
+            if (stopped || quitting || busy) return;    // our own stop / start handles it
             WindowFixer.ClearKomorebiTransparency();
             crashes.Add(DateTime.Now);
             crashes.RemoveAll(d => (DateTime.Now - d).TotalSeconds > 60);
@@ -2950,14 +3065,49 @@ namespace KomorebiTray
             StartKomorebi();
         }
 
-        DateTime lastToggle = DateTime.MinValue;
+        System.Windows.Forms.Timer accentTimer;
 
-        // A double-click on the icon must not stop and immediately restart everything
+        // Accent changes arrive as a burst of setting broadcasts; settle for a moment, then follow the new colour
+        void OnPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+        {
+            if (e.Category != Microsoft.Win32.UserPreferenceCategory.General && e.Category != Microsoft.Win32.UserPreferenceCategory.Color) return;
+            invoker.BeginInvoke((MethodInvoker)(() =>
+            {
+                if (accentTimer == null)
+                {
+                    accentTimer = new System.Windows.Forms.Timer { Interval = 600 };
+                    accentTimer.Tick += (s, a) =>
+                    {
+                        accentTimer.Stop();
+                        if (!stopped && !busy && settingsWin == null && AccentBorder.Sync()) Run.K("reload-configuration");
+                    };
+                }
+                accentTimer.Stop();
+                accentTimer.Start();
+            }));
+        }
+
+        DateTime lastToggle = DateTime.MinValue;
+        bool busy;      // a stop or start is still in progress
+
+        // The icon flips at once and the slow part (waiting for komorebi) runs off the UI thread, so the
+        // tray never freezes: clicks during a stop/start are ignored instead of queuing up and undoing it.
+        // A double-click still counts as one click.
         void ToggleAll()
         {
-            if ((DateTime.Now - lastToggle).TotalMilliseconds < 1000) return;
+            if (busy || (DateTime.Now - lastToggle).TotalMilliseconds < SystemInformation.DoubleClickTime) return;
             lastToggle = DateTime.Now;
             if (stopped) StartAll(); else StopAll();
+        }
+
+        void Background(Action work, Action done)
+        {
+            busy = true;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { work(); } catch (Exception e) { Log.Write("toggle: " + e.Message); }
+                invoker.BeginInvoke((MethodInvoker)(() => { busy = false; lastToggle = DateTime.Now; done(); }));
+            });
         }
 
         void StopAll()
@@ -2967,25 +3117,57 @@ namespace KomorebiTray
             if (apps != null) apps.Close();
             if (settingsWin != null) settingsWin.Close();   // saves pending changes first
             hotkeys.Clear();
-            Run.K("stop", 4000);   // komorebi restores every hidden window, removes borders and exits
-            WaitForKomorebiExit();
-            WindowFixer.ClearKomorebiTransparency();
-            tray.Text = "komorebi (stopped)";
             tray.Icon = StoppedIcon();
-            tray.ShowBalloonTip(1200, "komorebi", "Everything stopped", ToolTipIcon.Info);
-            Native.Trim();
+            tray.Text = "komorebi (stopping…)";
+            Background(() =>
+            {
+                Run.K("stop", 4000);   // komorebi restores every hidden window, removes borders and exits
+                ForceKomorebiExit();
+                WindowFixer.ClearKomorebiTransparency();
+            }, () =>
+            {
+                tray.Text = "komorebi (stopped)";
+                tray.ShowBalloonTip(1200, "komorebi", "Everything stopped", ToolTipIcon.Info);
+                Native.Trim();
+            });
         }
 
         void StartAll()
         {
             stopped = false;
-            // A komorebi that is still shutting down would make "start" a no-op; give it a moment to exit
-            WaitForKomorebiExit();
-            if (!Run.IsRunning("komorebi")) StartKomorebi(); else Watch();
-            LoadHotkeys(false);
-            tray.Text = "komorebi";
+            Unwatch();      // a lingering old komorebi exiting now is not a crash
             tray.Icon = normalIcon;
-            tray.ShowBalloonTip(1200, "komorebi", "Everything started", ToolTipIcon.Info);
+            tray.Text = "komorebi (starting…)";
+            LoadHotkeys(false);
+            Background(() =>
+            {
+                // A komorebi that is still shutting down would make "start" a no-op
+                ForceKomorebiExit();
+                if (stopped) return;
+                AccentBorder.Sync();
+                WindowFixer.ClearKomorebiTransparency();
+                if (!Run.StartElevatedKomorebi()) Run.K("start --clean-state");
+            }, () =>
+            {
+                if (stopped) return;
+                Watch();
+                tray.Text = "komorebi";
+                tray.ShowBalloonTip(1200, "komorebi", "Everything started", ToolTipIcon.Info);
+            });
+        }
+
+        // komorebi sometimes lingers after "stop" (with many windows it can take a long time to exit); its
+        // windows are already restored by then, so end it. An admin komorebi can only be ended by the
+        // "komorebi (elevated stop)" task the installer adds next to the elevated start task.
+        static void ForceKomorebiExit()
+        {
+            for (int i = 0; i < 40 && Run.IsRunning("komorebi"); i++) Thread.Sleep(100);
+            if (!Run.IsRunning("komorebi")) return;
+            Log.Write("komorebi didn't exit after stop; ending it");
+            Run.KillAll("komorebi");
+            if (Run.IsRunning("komorebi")) Run.Start("schtasks.exe", "/run /tn \"" + Run.ElevatedStopTask + "\"", 5000);
+            for (int i = 0; i < 30 && Run.IsRunning("komorebi"); i++) Thread.Sleep(100);
+            if (Run.IsRunning("komorebi")) Log.Write("komorebi is still running (admin, and no elevated stop task)");
         }
 
         Icon StoppedIcon()

@@ -30,7 +30,7 @@ komorebi does the tiling. komorebi-tray wraps it in a keyboard-first desktop exp
 | **Turning it off** | `komorebic stop` (hotkeys keep running) | One click on the tray icon stops or starts *everything*: tiling, borders, hotkeys and menus |
 | **Crashes** | Windows can be left semi-transparent or untileable | The tray clears leftover transparency and restarts komorebi automatically |
 | **Admin apps** | Can't be tiled unless komorebi runs elevated | Optional admin mode, set up once by the installer; no UAC prompt at each start |
-| **Look** | Your own config | A tuned default: gaps, rounded orange borders, focus transparency and smooth animations |
+| **Look** | Your own config | A tuned default: gaps, rounded orange borders, focus transparency and smooth animations. The focused border can follow your Windows accent colour |
 
 ## Screenshots
 
@@ -60,7 +60,7 @@ The installer:
 - installs komorebi from its official winget package (`LGUG2Z.komorebi`) if it isn't installed yet;
 - copies the tray to `%USERPROFILE%\.config\komorebi\tray` and adds Start menu and (optionally) sign-in shortcuts;
 - installs the default `komorebi.json` and keybinds when you have none, or, if you choose to, replaces yours after backing them up as `*.before-komorebi-tray-<date>`;
-- can set up **admin mode** (a scheduled task that starts komorebi elevated, so it can also tile apps that run as administrator);
+- can set up **admin mode**: two on-demand scheduled tasks that start komorebi elevated (so it can also tile apps that run as administrator) and end it if it doesn't exit after a stop. Windows asks for permission once;
 - registers itself in **Settings → Apps**, where you can uninstall it.
 
 Running it again updates the tray and leaves your config alone unless you ask otherwise. For scripted installs: `komorebi-tray-setup.exe /S`.
@@ -101,6 +101,7 @@ Keybinds are stored in the standard whkd format at `%USERPROFILE%\.config\whkdrc
 
 - **Tray icon:** white while running, grey while stopped. Left-click stops or starts everything; right-click opens the menu (settings, keybinds, reload config, save diagnostics, quit).
 - **Menus** (Alt+K, Alt+C, Alt+Space) fade in and out; press their shortcut again, Esc, or click away to close them.
+- **Match Windows accent** (Alt+C → Borders) gives the focused window's border your Windows accent colour, and follows it live when you change it in Settings → Personalization → Colors. Turning it off brings back the colour you had before. The choice is stored in `komorebi-tray.json` next to your config.
 - **Alt+C** saves when it closes and makes komorebi reload; **Ctrl+S** applies without closing, and **Ctrl+E** opens the raw `komorebi.json`. Each save keeps the previous file as `komorebi.json.bak`.
 - **Command line:** `komorebi-tray.exe --shortcuts | --settings | --apps | --toggle-pause | --browser | --diagnostics` controls the running tray.
 

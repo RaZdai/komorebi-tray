@@ -23,18 +23,19 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("komorebi-tray setup")]
 [assembly: AssemblyProduct("komorebi-tray")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace KomorebiTraySetup
 {
     static class Product
     {
         public const string Name = "komorebi-tray";
-        public const string Version = "1.0.0";
+        public const string Version = "1.1.0";
         public const string Publisher = "komorebi-tray contributors";
         public const string Url = "https://github.com/LGUG2Z/komorebi";
         public const string ElevatedTask = "komorebi (elevated)";
+        public const string ElevatedStopTask = "komorebi (elevated stop)";
     }
 
     // Where everything goes. Mirrors how the tray finds its files (KOMOREBI_CONFIG_HOME / WHKD_CONFIG_HOME).
@@ -286,7 +287,7 @@ namespace KomorebiTraySetup
             if (o.Elevated)
             {
                 report("Setting up admin mode (Windows will ask for permission)…", 0.86);
-                if (!CreateElevatedTask(komorebic)) report("Admin mode was skipped (permission declined)", 0.9);
+                if (!CreateElevatedTasks(komorebic)) report("Admin mode was skipped (permission declined)", 0.9);
             }
 
             if (o.StartNow)
@@ -299,25 +300,47 @@ namespace KomorebiTraySetup
             report("Done", 1);
         }
 
-        // The tray runs this on-demand task (if it exists) to start komorebi as admin without a UAC prompt each time
-        static bool CreateElevatedTask(string komorebic)
+        // On-demand tasks the tray runs, so an admin komorebi needs no UAC prompt each time: one starts it,
+        // the other ends it when it doesn't exit after a stop (a normal tray can't end an admin process).
+        // Whatever is missing is created in one elevated call, so there is a single permission prompt.
+        static bool CreateElevatedTasks(string komorebic)
         {
             string noConsole = Path.Combine(Path.GetDirectoryName(komorebic), "komorebic-no-console.exe");
             if (!File.Exists(noConsole)) noConsole = komorebic;
+            var files = new List<string>();
+            var cmd = new StringBuilder();
+            try
+            {
+                if (!Sys.TaskExists(Product.ElevatedTask))
+                    AddTask(cmd, files, Product.ElevatedTask, "Starts komorebi as administrator for komorebi-tray, so it can tile admin windows.",
+                        noConsole, "start --clean-state", "PT0S");
+                if (!Sys.TaskExists(Product.ElevatedStopTask))
+                    AddTask(cmd, files, Product.ElevatedStopTask, "Ends an administrator komorebi for komorebi-tray when it doesn't exit after a stop.",
+                        "taskkill.exe", "/f /im komorebi.exe", "PT1M");
+                if (cmd.Length == 0) return true;
+                Sys.RunElevated("cmd.exe", "/c \"" + cmd + "\"");
+                return Sys.TaskExists(Product.ElevatedTask) && Sys.TaskExists(Product.ElevatedStopTask);
+            }
+            finally { foreach (string f in files) try { File.Delete(f); } catch { } }
+        }
+
+        static void AddTask(StringBuilder cmd, List<string> files, string name, string description, string command, string args, string timeLimit)
+        {
             string user = Environment.UserDomainName + "\\" + Environment.UserName;
             string xml =
 "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n" +
 "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\r\n" +
-"  <RegistrationInfo><Description>Starts komorebi as administrator for komorebi-tray, so it can tile admin windows.</Description></RegistrationInfo>\r\n" +
+"  <RegistrationInfo><Description>" + description + "</Description></RegistrationInfo>\r\n" +
 "  <Principals><Principal id=\"Author\"><UserId>" + System.Security.SecurityElement.Escape(user) + "</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>\r\n" +
 "  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>" +
-"<AllowStartOnDemand>true</AllowStartOnDemand><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>5</Priority></Settings>\r\n" +
-"  <Actions Context=\"Author\"><Exec><Command>" + System.Security.SecurityElement.Escape(noConsole) + "</Command><Arguments>start --clean-state</Arguments></Exec></Actions>\r\n" +
+"<AllowStartOnDemand>true</AllowStartOnDemand><ExecutionTimeLimit>" + timeLimit + "</ExecutionTimeLimit><Priority>5</Priority></Settings>\r\n" +
+"  <Actions Context=\"Author\"><Exec><Command>" + System.Security.SecurityElement.Escape(command) + "</Command><Arguments>" + System.Security.SecurityElement.Escape(args) + "</Arguments></Exec></Actions>\r\n" +
 "</Task>\r\n";
-            string file = Path.Combine(Path.GetTempPath(), "komorebi-elevated-task.xml");
+            string file = Path.Combine(Path.GetTempPath(), "komorebi-task-" + files.Count + ".xml");
             File.WriteAllText(file, xml, Encoding.Unicode);
-            try { return Sys.RunElevated("schtasks.exe", "/create /tn \"" + Product.ElevatedTask + "\" /xml \"" + file + "\" /f") == 0; }
-            finally { try { File.Delete(file); } catch { } }
+            files.Add(file);
+            if (cmd.Length > 0) cmd.Append(" & ");
+            cmd.Append("schtasks /create /tn \"" + name + "\" /xml \"" + file + "\" /f");
         }
 
         public static void Uninstall(Target t, Options o, Action<string, double> report)
@@ -339,16 +362,16 @@ namespace KomorebiTraySetup
                 if (File.Exists(f)) File.Delete(f);
             Registry.CurrentUser.DeleteSubKeyTree(t.RegKey, false);
 
-            if (!t.Test && Sys.TaskExists(Product.ElevatedTask))
+            if (!t.Test && (Sys.TaskExists(Product.ElevatedTask) || Sys.TaskExists(Product.ElevatedStopTask)))
             {
                 report("Removing admin mode (Windows will ask for permission)…", 0.7);
-                Sys.RunElevated("schtasks.exe", "/delete /tn \"" + Product.ElevatedTask + "\" /f");
+                Sys.RunElevated("cmd.exe", "/c \"schtasks /delete /tn \"" + Product.ElevatedTask + "\" /f & schtasks /delete /tn \"" + Product.ElevatedStopTask + "\" /f\"");
             }
 
             if (o.RemoveConfig)
             {
                 report("Removing your config and keybinds…", 0.85);
-                foreach (string f in new[] { "komorebi.json", "applications.json", "tray.log", "diag.txt" })
+                foreach (string f in new[] { "komorebi.json", "komorebi-tray.json", "applications.json", "tray.log", "diag.txt" })
                 {
                     string p = Path.Combine(t.ConfigDir, f);
                     if (File.Exists(p)) File.Delete(p);
@@ -681,7 +704,7 @@ namespace KomorebiTraySetup
             Cursor = Cursors.Default;
             var o = new Options();
             if (uninstall) o.RemoveConfig = removeConfig.Value;
-            else { o.Autostart = autostart.Value; o.UseDefaults = defaults.Value; o.Elevated = elevated.Value && !Sys.TaskExists(Product.ElevatedTask); }
+            else { o.Autostart = autostart.Value; o.UseDefaults = defaults.Value; o.Elevated = elevated.Value && !(Sys.TaskExists(Product.ElevatedTask) && Sys.TaskExists(Product.ElevatedStopTask)); }
             Report(uninstall ? "Uninstalling…" : "Installing…", 0.02);
             var worker = new Thread(() =>
             {
