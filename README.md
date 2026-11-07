@@ -76,7 +76,7 @@ Mod key is **Alt** (Windows reserves most Win-key combos). Change any of them wi
 | Keys | Action |
 |---|---|
 | `Alt + Enter` | Open Windows Terminal |
-| `Alt + Shift + Enter` | Open your default web browser |
+| `Alt + Shift + Enter` | Bring your browser to the front (or start it, restoring your tabs) |
 | `Alt + Space` | App launcher |
 | `Alt + K` | Keybind editor |
 | `Alt + C` | Settings |

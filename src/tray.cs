@@ -185,8 +185,44 @@ namespace KomorebiTray
             }
             catch (Exception e) { Log.Write("browser lookup: " + e.Message); }
             Native.AllowSetForegroundWindow(-1);
-            if (exe != null && File.Exists(exe)) Shell(exe, "");
+            // Launching the exe while the browser runs opens a fresh window on a new tab page, so bring back
+            // the window you already have; with none open, start it like the Start menu does (through Explorer,
+            // so "continue where you left off" restores your tabs)
+            if (exe != null && File.Exists(exe)) { if (!FocusWindowOf(exe)) Shell("explorer.exe", "\"" + exe + "\""); }
             else Shell("explorer.exe", "https://www.google.com");
+        }
+
+        delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+        [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc cb, IntPtr l);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+        [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+        [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+        [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
+        [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+
+        // The browser's most recently used main window (first in z-order): titled, captioned, not owned, not a tool window
+        static bool FocusWindowOf(string exe)
+        {
+            var pids = new HashSet<uint>();
+            foreach (var p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exe))) { pids.Add((uint)p.Id); p.Dispose(); }
+            if (pids.Count == 0) return false;
+            IntPtr found = IntPtr.Zero;
+            EnumWindows((h, l) =>
+            {
+                uint pid;
+                GetWindowThreadProcessId(h, out pid);
+                if (!pids.Contains(pid) || !IsWindowVisible(h) || GetWindowTextLength(h) == 0 || GetWindow(h, 4) != IntPtr.Zero) return true;   // 4 = GW_OWNER
+                if ((GetWindowLong(h, -16) & 0x00C00000) != 0x00C00000 || (GetWindowLong(h, -20) & 0x80) != 0) return true;      // WS_CAPTION, WS_EX_TOOLWINDOW
+                found = h;
+                return false;
+            }, IntPtr.Zero);
+            if (found == IntPtr.Zero) return false;
+            if (IsIconic(found)) ShowWindow(found, 9);   // SW_RESTORE
+            SetForegroundWindow(found);
+            return true;
         }
 
         static string ExeFrom(string cmd)
