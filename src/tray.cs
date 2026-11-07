@@ -229,8 +229,9 @@ namespace KomorebiTray
         public static readonly Color Border = Color.FromArgb(66, 66, 74);
         public static readonly Color Text = Color.FromArgb(236, 236, 240);
         public static readonly Color Dim = Color.FromArgb(150, 150, 162);
-        public static readonly Color Accent = Color.FromArgb(192, 69, 23);
-        public static readonly Color AccentHover = Color.FromArgb(214, 88, 40);
+        // The orange by default; the Windows accent while "Match Windows accent" is on (see Refresh)
+        public static Color Accent = Color.FromArgb(192, 69, 23);
+        public static Color AccentHover = Color.FromArgb(214, 88, 40);
         public static readonly Color Danger = Color.FromArgb(235, 100, 100);
 
         public static readonly Font UI = new Font("Segoe UI", 9.75f, FontStyle.Bold);
@@ -241,8 +242,27 @@ namespace KomorebiTray
         public static readonly Font Big = new Font("Segoe UI", 12f, FontStyle.Bold);
 
         public static readonly Color TextSoft = Color.FromArgb(200, 200, 208);
-        public static readonly Color Selection = Color.FromArgb(48, 40, 38);
+        public static Color Selection = Color.FromArgb(48, 40, 38);
         public static readonly Color KeyShadow = Color.FromArgb(14, 14, 16);
+
+        static readonly Color DefaultAccent = Accent, DefaultHover = AccentHover, DefaultSelection = Selection;
+
+        // Menus pick up the accent each time one opens (and when the setting is switched in Alt+C)
+        public static void Refresh() { Refresh(AccentBorder.Follows(AccentBorder.LoadPrefs())); }
+
+        public static void Refresh(bool followWindows)
+        {
+            Color c;
+            if (!followWindows || !AccentBorder.MenuColour(out c)) { Accent = DefaultAccent; AccentHover = DefaultHover; Selection = DefaultSelection; return; }
+            Accent = c;
+            AccentHover = Mix(c, Color.White, 0.15);
+            Selection = Mix(Color.FromArgb(40, 40, 42), c, 0.12);
+        }
+
+        static Color Mix(Color a, Color b, double t)
+        {
+            return Color.FromArgb((int)Math.Round(a.R + (b.R - a.R) * t), (int)Math.Round(a.G + (b.G - a.G) * t), (int)Math.Round(a.B + (b.B - a.B) * t));
+        }
 
         // First installed of the monospace fonts Omarchy-style setups use
         static readonly string MonoFamily = PickMono();
@@ -1392,9 +1412,9 @@ namespace KomorebiTray
         // Launcher-style ranking: prefix > word start > substring > in-order letters (no usage history)
         public static int Score(AppEntry a, string q)
         {
+            if (q.Length == 0) return 1;    // nothing typed: every app, alphabetically (ties sort by name)
             int s;
-            if (q.Length == 0) s = 1;
-            else if (a.Lower.StartsWith(q)) s = 1000;
+            if (a.Lower.StartsWith(q)) s = 1000;
             else if (a.Lower.Contains(" " + q) || a.Lower.Contains("-" + q) || a.Lower.Contains("(" + q)) s = 800;
             else if (a.Lower.Contains(q)) s = 600;
             else
@@ -1825,6 +1845,31 @@ namespace KomorebiTray
             return null;
         }
 
+        // The accent for the dark menus. A very dark accent would vanish against them, so like Windows' own
+        // dark mode this uses the lighter shade from the accent palette instead (AccentPalette: 8 RGBA entries, light to dark).
+        public static bool MenuColour(out Color c)
+        {
+            c = Color.Empty;
+            string hex = Hex();
+            if (hex == null || !SettingsEditor.TryColor(hex, out c)) return false;
+            if (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B >= 60) return true;
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent"))
+                {
+                    var pal = k == null ? null : k.GetValue("AccentPalette") as byte[];
+                    if (pal != null && pal.Length >= 8)
+                    {
+                        Color light = Color.FromArgb(pal[4], pal[5], pal[6]);
+                        if (0.2126 * light.R + 0.7152 * light.G + 0.0722 * light.B >= 60) { c = light; return true; }
+                    }
+                }
+            }
+            catch { }
+            c = Color.FromArgb(Math.Max(c.R, (byte)110), Math.Max(c.G, (byte)110), Math.Max(c.B, (byte)110));
+            return true;
+        }
+
         // Brings cfg in line with the preference (following: accent; not following: the colour from before). True when cfg changed.
         public static bool Apply(Dictionary<string, object> cfg, Dictionary<string, object> prefs)
         {
@@ -2103,6 +2148,13 @@ namespace KomorebiTray
             if (Equals(Value(s), value)) return;
             if (s.Path == "rule.videos") VideoRule.Set(cfg, Convert.ToBoolean(value));
             else if (s.Path.StartsWith("tray.")) prefs[s.Path.Substring(5)] = value;
+            if (s.Path == "tray." + AccentBorder.FollowKey)
+            {
+                // Recolour this window straight away; the other menus follow when they next open
+                Theme.Refresh(Convert.ToBoolean(value));
+                Native.LauncherChrome(this, Theme.Accent);
+                Invalidate(true);
+            }
             else Json.Set(cfg, s.Path, value);
             changed = true;
             UpdateHint();
@@ -3213,6 +3265,7 @@ namespace KomorebiTray
             if (stopped) return;
             // Hotkeys would otherwise fire (e.g. Alt+W closes windows) while recording shortcuts
             hotkeys.Clear();
+            Theme.Refresh();
             editor = new KeybindEditor();
             editor.FormClosed += (s, e) =>
             {
@@ -3231,6 +3284,7 @@ namespace KomorebiTray
         {
             if (settingsWin != null) { settingsWin.Close(); return; }
             if (stopped) return;
+            Theme.Refresh();
             settingsWin = new SettingsEditor();
             settingsWin.FormClosed += (s, e) =>
             {
@@ -3250,6 +3304,7 @@ namespace KomorebiTray
         {
             if (apps != null) { apps.Close(); return; }
             if (stopped) return;
+            Theme.Refresh();
             apps = new AppLauncher();
             apps.FormClosed += (s, e) => { apps.Dispose(); apps = null; Native.Trim(); };
             apps.Show();

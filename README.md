@@ -102,7 +102,7 @@ Keybinds are stored in the standard whkd format at `%USERPROFILE%\.config\whkdrc
 - **Tray icon:** white while running, grey while stopped. Left-click stops or starts everything; right-click opens the menu (settings, keybinds, reload config, save diagnostics, quit).
 - **Menus** (Alt+K, Alt+C, Alt+Space) fade in and out; press their shortcut again, Esc, or click away to close them.
 - **Keep videos solid** (Alt+C → Transparency, on by default) stops YouTube, Twitch and X from being dimmed when their browser window isn't focused, so a video you're watching on the side stays clear. It goes by the tab in front: a video tab behind another tab in the same window is dimmed like the rest. It covers all of X, not just its videos.
-- **Match Windows accent** (Alt+C → Borders) gives the focused window's border your Windows accent colour, and follows it live when you change it in Settings → Personalization → Colors. Turning it off brings back the colour you had before. The choice is stored in `komorebi-tray.json` next to your config.
+- **Match Windows accent** (Alt+C → Borders) gives the focused window's border, and the Alt+K, Alt+C and Alt+Space menus, your Windows accent colour, and follows it live when you change it in Settings → Personalization → Colors. Turning it off brings back the colour you had before. The choice is stored in `komorebi-tray.json` next to your config.
 - **Alt+C** saves when it closes and makes komorebi reload; **Ctrl+S** applies without closing, and **Ctrl+E** opens the raw `komorebi.json`. Each save keeps the previous file as `komorebi.json.bak`.
 - **Command line:** `komorebi-tray.exe --shortcuts | --settings | --apps | --toggle-pause | --browser | --diagnostics` controls the running tray.
 
