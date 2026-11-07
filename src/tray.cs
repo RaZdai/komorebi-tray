@@ -2043,6 +2043,7 @@ namespace KomorebiTray
                 E("Behaviour", "Hide windows by", "How other workspaces' windows are hidden", "window_hiding_behaviour", "Cloak", new[] { "Cloak", "Hide", "Minimize" }),
                 E("Behaviour", "Across monitors", "When a window moves onto another monitor", "cross_monitor_move_behaviour", "Swap", new[] { "Swap", "Insert", "NoOp" }),
                 N("Behaviour", "Resize step", "How much one resize shortcut changes a window", "resize_delta", 50, 10, 300, 10, " px"),
+                S("Behaviour", "bool", "Pause shortcuts in fullscreen", "Games and fullscreen video keep every key", "tray." + TrayApp.PauseInFullscreenKey, true),
             };
 
             var monitors = Json.Get(cfg, "monitors") as System.Collections.IList;
@@ -2946,6 +2947,39 @@ namespace KomorebiTray
         }
     }
 
+    // A game or fullscreen video in front: a window without a title bar covering its whole monitor.
+    // Maximized normal windows keep their title bar, so they don't count even with an auto-hiding taskbar.
+    static class FullscreenApp
+    {
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+        [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder sb, int n);
+        [StructLayout(LayoutKind.Sequential)] struct RECT { public int L, T, R, B; }
+
+        static readonly uint Self = (uint)Process.GetCurrentProcess().Id;
+        static readonly string[] Shell = { "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Windows.UI.Core.CoreWindow", "XamlExplorerHostIslandWindow" };
+
+        public static bool InFront()
+        {
+            IntPtr h = GetForegroundWindow();
+            if (h == IntPtr.Zero || IsIconic(h)) return false;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            if (pid == Self) return false;
+            var cls = new StringBuilder(64);
+            GetClassName(h, cls, 64);
+            if (Array.IndexOf(Shell, cls.ToString()) >= 0) return false;
+            if ((GetWindowLong(h, -16) & 0x00C00000) == 0x00C00000) return false;   // WS_CAPTION: a normal (maybe maximized) window
+            RECT r;
+            if (!GetWindowRect(h, out r)) return false;
+            Rectangle m = Screen.FromHandle(h).Bounds;
+            return r.L <= m.Left && r.T <= m.Top && r.R >= m.Right && r.B >= m.Bottom;
+        }
+    }
+
     // ---------------------------------------------------------------- tray
 
     class TrayApp : ApplicationContext
@@ -3008,6 +3042,7 @@ namespace KomorebiTray
             {
                 quitting = true;
                 Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnPreferenceChanged;
+                if (foregroundHook != IntPtr.Zero) UnhookWinEvent(foregroundHook);
                 hotkeys.Clear();
                 Run.K("stop", 5000);
                 WaitForKomorebiExit();
@@ -3038,6 +3073,7 @@ namespace KomorebiTray
             if (!Run.IsRunning("komorebi")) StartKomorebi();
             else { if (AccentBorder.Sync()) Run.K("reload-configuration"); Watch(); }
             LoadHotkeys(false);
+            WatchFullscreen();
             // Windows broadcasts a setting change when the accent colour changes
             Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnPreferenceChanged;
             Log.Write("running");
@@ -3062,6 +3098,7 @@ namespace KomorebiTray
 
         void LoadHotkeys(bool announce)
         {
+            if (fullscreenPaused) return;   // they come back when the fullscreen app leaves the front
             List<string> failed = hotkeys.Load();
             if (failed.Count > 0)
                 tray.ShowBalloonTip(4000, "komorebi", "These shortcuts are taken by another app or invalid: " +
@@ -3071,6 +3108,48 @@ namespace KomorebiTray
         }
 
         void ReloadHotkeys() { if (!stopped && editor == null) LoadHotkeys(false); }
+
+        // ---- fullscreen apps (games, fullscreen video)
+        // Global shortcuts would otherwise reach into games: Alt+Enter is many games' fullscreen toggle, and Alt+W
+        // would close the tiled window behind the game. While a fullscreen window is in front the shortcuts are
+        // released, and they come back when it isn't. Driven by Windows' foreground event: no polling, nothing on
+        // the input path. A short re-check catches games that only go fullscreen a moment after taking focus.
+
+        delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int obj, int child, uint thread, uint time);
+        [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, WinEventProc proc, uint pid, uint tid, uint flags);
+        [DllImport("user32.dll")] static extern bool UnhookWinEvent(IntPtr hook);
+        WinEventProc foregroundProc;    // kept in a field so the delegate isn't collected while Windows holds it
+        IntPtr foregroundHook;
+        bool fullscreenPaused, pauseInFullscreen = true;
+        System.Windows.Forms.Timer fullscreenRecheck;
+
+        public const string PauseInFullscreenKey = "pause_hotkeys_fullscreen";
+
+        void WatchFullscreen()
+        {
+            object v;
+            var prefs = AccentBorder.LoadPrefs();
+            pauseInFullscreen = !prefs.TryGetValue(PauseInFullscreenKey, out v) || Convert.ToBoolean(v);
+            if (foregroundHook != IntPtr.Zero) { CheckFullscreen(false); return; }
+            foregroundProc = (hook, ev, hwnd, obj, child, thread, time) => CheckFullscreen(true);
+            foregroundHook = SetWinEventHook(3, 3, IntPtr.Zero, foregroundProc, 0, 0, 0x0000 | 0x0002);   // EVENT_SYSTEM_FOREGROUND; out of context, skip own process
+            fullscreenRecheck = new System.Windows.Forms.Timer { Interval = 1500 };
+            fullscreenRecheck.Tick += (s, e) => { fullscreenRecheck.Stop(); CheckFullscreen(false); };
+            CheckFullscreen(false);
+        }
+
+        void CheckFullscreen(bool recheckSoon)
+        {
+            bool full = pauseInFullscreen && !stopped && FullscreenApp.InFront();
+            if (full != fullscreenPaused)
+            {
+                fullscreenPaused = full;
+                if (full) { hotkeys.Clear(); Log.Write("fullscreen app in front: shortcuts paused"); }
+                else if (!stopped && editor == null) LoadHotkeys(false);
+                if (!stopped && !busy) tray.Text = full ? "komorebi (shortcuts paused: fullscreen app)" : "komorebi";
+            }
+            if (recheckSoon && fullscreenRecheck != null) { fullscreenRecheck.Stop(); fullscreenRecheck.Start(); }
+        }
 
         // Runs a whkdrc command: tray features in-process, komorebic directly (no cmd in between), the rest via cmd
         void Execute(string command)
@@ -3235,6 +3314,7 @@ namespace KomorebiTray
             if (apps != null) apps.Close();
             if (settingsWin != null) settingsWin.Close();   // saves pending changes first
             hotkeys.Clear();
+            fullscreenPaused = false;
             tray.Icon = StoppedIcon();
             tray.Text = "komorebi (stopping…)";
             Background(() =>
@@ -3270,6 +3350,7 @@ namespace KomorebiTray
                 if (stopped) return;
                 Watch();
                 tray.Text = "komorebi";
+                CheckFullscreen(false);
                 tray.ShowBalloonTip(1200, "komorebi", "Everything started", ToolTipIcon.Info);
             });
         }
@@ -3329,6 +3410,7 @@ namespace KomorebiTray
                 settingsWin = null;
                 // The settings window already saved and had komorebi reload; just confirm it
                 if (saved && !stopped) tray.ShowBalloonTip(1500, "komorebi", "Settings applied", ToolTipIcon.Info);
+                WatchFullscreen();      // picks up the "Pause shortcuts in fullscreen" switch
                 Native.Trim();
             };
             settingsWin.Show();
