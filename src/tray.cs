@@ -1862,6 +1862,33 @@ namespace KomorebiTray
         }
     }
 
+    // "Keep videos solid": a transparency_ignore_rules entry matching browser titles of YouTube, Twitch and X
+    // ("… - YouTube - Brave", "Home / X - Edge", "(3) YouTube - Chrome") and picture-in-picture players.
+    // The switch in the settings screen is just whether this rule is in komorebi.json.
+    static class VideoRule
+    {
+        public const string Id = @"(?i)(^(\(\d+\)\s)?|\s[-/]\s)(YouTube|Twitch|X)(\s-\s|$)|^Picture in picture$";
+        const string ListPath = "transparency_ignore_rules";
+
+        static bool IsRule(object o) { return Json.Get(o, "kind") as string == "Title" && Json.Get(o, "id") as string == Id; }
+
+        public static bool Has(Dictionary<string, object> cfg)
+        {
+            var rules = Json.Get(cfg, ListPath) as System.Collections.IList;
+            if (rules != null) foreach (object r in rules) if (IsRule(r)) return true;
+            return false;
+        }
+
+        public static void Set(Dictionary<string, object> cfg, bool on)
+        {
+            var list = new List<object>();
+            var rules = Json.Get(cfg, ListPath) as System.Collections.IList;
+            if (rules != null) foreach (object r in rules) if (!IsRule(r)) list.Add(r);
+            if (on) list.Add(new Dictionary<string, object> { { "kind", "Title" }, { "id", Id }, { "matching_strategy", "Regex" } });
+            Json.Set(cfg, ListPath, list.ToArray());
+        }
+    }
+
     class Setting
     {
         public string Group, Label, Description, Path, Kind;   // Kind: bool | int | enum | color
@@ -1922,6 +1949,7 @@ namespace KomorebiTray
 
                 S("Transparency", "bool", "Dim inactive windows", "Make windows you're not using slightly see-through", "transparency", false),
                 D(N("Transparency", "Inactive opacity", "How solid inactive windows stay", "transparency_alpha", 200, 50, 255, 5, ""), "transparency"),
+                D(S("Transparency", "bool", "Keep videos solid", "YouTube, Twitch and X stay fully visible when unfocused", "rule.videos", false), "transparency"),
 
                 S("Animation", "bool", "Animations", "Slide windows smoothly instead of jumping", "animation.enabled", false),
                 D(N("Animation", "Frame rate", "Smoothest when it divides your refresh rate", "animation.fps", 60, 30, 240, 10, " fps"), "animation.enabled"),
@@ -2031,6 +2059,7 @@ namespace KomorebiTray
         // "tray.*" paths are the tray's own preferences (komorebi-tray.json), everything else is komorebi.json
         object Raw(string path)
         {
+            if (path == "rule.videos") return VideoRule.Has(cfg);
             if (!path.StartsWith("tray.")) return Json.Get(cfg, path);
             object v;
             return prefs.TryGetValue(path.Substring(5), out v) ? v : null;
@@ -2072,7 +2101,8 @@ namespace KomorebiTray
         public void Change(Setting s, object value)
         {
             if (Equals(Value(s), value)) return;
-            if (s.Path.StartsWith("tray.")) prefs[s.Path.Substring(5)] = value;
+            if (s.Path == "rule.videos") VideoRule.Set(cfg, Convert.ToBoolean(value));
+            else if (s.Path.StartsWith("tray.")) prefs[s.Path.Substring(5)] = value;
             else Json.Set(cfg, s.Path, value);
             changed = true;
             UpdateHint();

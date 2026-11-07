@@ -16,6 +16,11 @@
       "kind": "Exe",
       "id": "(?i)^komorebi-tray(-setup)?\\.exe$",
       "matching_strategy": "Regex"
+    },
+    {
+      "kind": "Title",
+      "id": "(?i)(^(\\(\\d+\\)\\s)?|\\s[-/]\\s)(YouTube|Twitch|X)(\\s-\\s|$)|^Picture in picture$",
+      "matching_strategy": "Regex"
     }
   ],
   "default_workspace_padding": 14,
