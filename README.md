@@ -129,6 +129,7 @@ The tray idles at a few MB of memory with no CPU use: it waits on Windows events
 
 - **An app won't tile:** it's probably running as administrator. Enable admin mode in the installer (run it again), or start that app normally.
 - **Windows stay semi-transparent or stop tiling after a crash:** click the tray icon twice (stop, then start). The tray clears leftover transparency and starts komorebi with a clean state.
+- **Claude (or another AI assistant) has trouble controlling the PC:** make sure your komorebi.json has no `manage_rules` entry for `claude.exe`. That rule makes komorebi tile *every* Claude window, including the click-through orange border Claude shows while it's in control. komorebi then squeezes that border into a tile and rearranges your windows under Claude's clicks. The Claude app tiles fine without the rule, and its border then stays full-screen above komorebi.
 - **Discord (or another Electron app) never looks dimmed:** it draws through DirectComposition, which ignores window transparency. For Discord, quit it fully (tray icon → Quit), open `%APPDATA%\discord\settings.json` and set `"chromiumSwitches": { "disable-direct-composition": "1" }`, then start it again. It keeps GPU acceleration.
 - **A shortcut doesn't work:** another app already owns it. The tray names the conflict in a notification; rebind it with Alt+K.
 - **Something else:** right-click the tray icon → *Save diagnostics*, which writes `diag.txt` next to your config.
