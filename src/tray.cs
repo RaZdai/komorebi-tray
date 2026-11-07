@@ -1932,14 +1932,14 @@ namespace KomorebiTray
         {
             var s = new List<Setting>
             {
-                N("Gaps", "Screen edge gap", "Space between windows and the edges of the screen", "default_workspace_padding", 10, 0, 100, 2, " px"),
+                N("Gaps", "Screen edge gap", "Space between windows and the screen edges", "default_workspace_padding", 10, 0, 100, 2, " px"),
                 N("Gaps", "Gap between windows", "Space between neighbouring tiled windows", "default_container_padding", 10, 0, 100, 2, " px"),
 
                 S("Borders", "bool", "Borders", "Draw a coloured outline around windows", "border", false),
                 D(N("Borders", "Width", "Thickness of the outline", "border_width", 8, 0, 20, 1, " px"), "border"),
                 D(N("Borders", "Offset", "Push the outline outwards (+) or inwards (−)", "border_offset", -1, -10, 20, 1, " px"), "border"),
                 D(E("Borders", "Corners", "Shape of the outline's corners", "border_style", "System", new[] { "System", "Rounded", "Square" }), "border"),
-                D(E("Borders", "Drawn by", "Komorebi's own outline, or Windows' thin native one", "border_implementation", "Komorebi", new[] { "Komorebi", "Windows" }), "border"),
+                D(E("Borders", "Drawn by", "Komorebi's own outline or Windows' native one", "border_implementation", "Komorebi", new[] { "Komorebi", "Windows" }), "border"),
                 D(S("Borders", "bool", "Match Windows accent", "Focused outline uses your Windows accent colour", "tray." + AccentBorder.FollowKey, false), "border"),
                 Off(D(S("Borders", "color", "Focused window", "Outline of the window you're working in", "border_colours.single", "#42A5F5"), "border"), "tray." + AccentBorder.FollowKey),
                 D(S("Borders", "color", "Other windows", "Outline of every other tiled window", "border_colours.unfocused", "#808080"), "border"),
@@ -1947,9 +1947,9 @@ namespace KomorebiTray
                 D(S("Borders", "color", "Stacked windows", "Outline when several windows share one tile", "border_colours.stack", "#00A542"), "border"),
                 D(S("Borders", "color", "Monocle", "Outline when one window fills the workspace", "border_colours.monocle", "#FF3399"), "border"),
 
-                S("Transparency", "bool", "Dim inactive windows", "Make windows you're not using slightly see-through", "transparency", false),
+                S("Transparency", "bool", "Dim inactive windows", "Make windows you're not using see-through", "transparency", false),
                 D(N("Transparency", "Inactive opacity", "How solid inactive windows stay", "transparency_alpha", 200, 50, 255, 5, ""), "transparency"),
-                D(S("Transparency", "bool", "Keep videos solid", "YouTube, Twitch and X stay fully visible when unfocused", "rule.videos", false), "transparency"),
+                D(S("Transparency", "bool", "Keep videos solid", "YouTube, Twitch and X stay fully visible", "rule.videos", false), "transparency"),
 
                 S("Animation", "bool", "Animations", "Slide windows smoothly instead of jumping", "animation.enabled", false),
                 D(N("Animation", "Frame rate", "Smoothest when it divides your refresh rate", "animation.fps", 60, 30, 240, 10, " fps"), "animation.enabled"),
