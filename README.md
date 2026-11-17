@@ -27,6 +27,7 @@ komorebi does the tiling. komorebi-tray wraps it in a keyboard-first desktop exp
 | **Changing keybinds** | Edit `whkdrc` by hand and restart whkd | **Alt+K**: a searchable list; press a new combo to rebind in place, pick actions from a menu |
 | **Changing settings** | Edit `komorebi.json` by hand | **Alt+C**: a settings screen with switches, sliders and colour pickers; changes apply live |
 | **Launching apps** | Start menu | **Alt+Space**: a launcher that searches every installed app, with icons, and keeps no history |
+| **Volume** | Windows' quick settings | **Alt+Shift+T**: a compact mixer for your output and every app playing sound, built into the tray |
 | **Turning it off** | `komorebic stop` (hotkeys keep running) | One click on the tray icon stops or starts *everything*: tiling, borders, hotkeys and menus |
 | **Crashes** | Windows can be left semi-transparent or untileable | The tray clears leftover transparency and restarts komorebi automatically |
 | **Admin apps** | Can't be tiled unless komorebi runs elevated | Optional admin mode, set up once by the installer; no UAC prompt at each start |
@@ -37,6 +38,10 @@ komorebi does the tiling. komorebi-tray wraps it in a keyboard-first desktop exp
 **Alt+K: keybindings.** Type to filter. Press Enter on a row and then the new keys to rebind it; Tab changes what a shortcut does.
 
 <img src="docs/screenshots/keybinds-search.png" width="640" alt="Keybind editor filtered by 'focus'">
+
+**Alt+Shift+T: volume mixer.** The default output's level, mute and output switch, a rotary knob, and one slider per app.
+
+<img src="docs/screenshots/volume-mixer.png" width="460" alt="Volume mixer">
 
 **Alt+C: settings.** Every komorebi.json option the tray knows, in plain English, grouped into sections. Dependent settings dim when their switch is off, and the search box finds anything across sections.
 
@@ -82,6 +87,7 @@ Mod key is **Alt** (Windows reserves most Win-key combos). Change any of them wi
 | `Alt + C` | Settings |
 | `Alt + W` | Close window |
 | `Alt + T` | Toggle floating |
+| `Alt + Shift + T` | Volume mixer |
 | `Alt + F` | Toggle fullscreen (monocle) |
 | `Alt + Shift + F` | Toggle maximize |
 | `Alt + J` / `Alt + Shift + J` | Flip layout horizontally / vertically |
@@ -99,13 +105,14 @@ Keybinds are stored in the standard whkd format at `%USERPROFILE%\.config\whkdrc
 
 ## Using it
 
-- **Tray icon:** white while running, grey while stopped. Left-click stops or starts everything; right-click opens the menu (settings, keybinds, reload config, save diagnostics, quit).
+- **Tray icon:** white while running, grey while stopped. Left-click stops or starts everything; right-click opens the menu (settings, keybinds, volume mixer, reload config, save diagnostics, quit).
 - **Menus** (Alt+K, Alt+C, Alt+Space) fade in and out; press their shortcut again, Esc, or click away to close them.
+- **Volume mixer** (Alt+Shift+T, or *Volume mixer* in the tray menu): opens at the top centre of the monitor your mouse is on (from the menu: under the tray icon). Drag the display or turn the knob (drag it, or scroll over it) to set the volume; the round buttons switch to your next output and mute it. Each app playing sound gets its own slider; click its icon to mute it. Arrow keys adjust, M mutes, Esc or a click away closes it. Alt+C → Volume mixer chooses whether quiet apps are listed and the colour of the level. It talks to Windows' audio directly and does nothing while closed.
 - **Keep videos solid** (Alt+C → Transparency, on by default) stops YouTube, Twitch and X from being dimmed when their browser window isn't focused, so a video you're watching on the side stays clear. It goes by the tab in front: a video tab behind another tab in the same window is dimmed like the rest. It covers all of X, not just its videos.
 - **Games and fullscreen video:** while a fullscreen window is in front (no title bar, covering its whole monitor), the tray pauses its shortcuts, so keys like Alt+Enter reach the game instead of opening a terminal. They come back the moment you leave it. Turn this off in Alt+C → Behaviour → *Pause shortcuts in fullscreen*. komorebi itself never tiles, dims or draws over fullscreen windows, and neither it nor the tray hooks your keyboard or mouse, so there's no added input delay.
 - **Match Windows accent** (Alt+C → Borders) gives the focused window's border, and the Alt+K, Alt+C and Alt+Space menus, your Windows accent colour, and follows it live when you change it in Settings → Personalization → Colors. Turning it off brings back the colour you had before. The choice is stored in `komorebi-tray.json` next to your config.
 - **Alt+C** saves when it closes and makes komorebi reload; **Ctrl+S** applies without closing, and **Ctrl+E** opens the raw `komorebi.json`. Each save keeps the previous file as `komorebi.json.bak`.
-- **Command line:** `komorebi-tray.exe --shortcuts | --settings | --apps | --toggle-pause | --browser | --diagnostics` controls the running tray.
+- **Command line:** `komorebi-tray.exe --shortcuts | --settings | --apps | --volume | --toggle-pause | --browser | --diagnostics` controls the running tray.
 
 ## Build from source
 
@@ -130,7 +137,7 @@ The tray idles at a few MB of memory with no CPU use: it waits on Windows events
 
 - **An app won't tile:** it's probably running as administrator. Enable admin mode in the installer (run it again), or start that app normally.
 - **Windows stay semi-transparent or stop tiling after a crash:** click the tray icon twice (stop, then start). The tray clears leftover transparency and starts komorebi with a clean state.
-- **Claude (or another AI assistant) has trouble controlling the PC:** make sure your komorebi.json has no `manage_rules` entry for `claude.exe`. That rule makes komorebi tile *every* Claude window, including the click-through orange border Claude shows while it's in control. komorebi then squeezes that border into a tile and rearranges your windows under Claude's clicks. The Claude app tiles fine without the rule, and its border then stays full-screen above komorebi.
+- **Claude desktop:** its window is frameless, so komorebi wouldn't tile it on its own. The tray hands Claude's main window to komorebi when it comes to the front, and leaves alone the click-through orange border Claude shows while it controls the computer, so that border stays full-screen above your tiles. Don't add a `manage_rules` entry for `claude.exe`: it can't tell the two windows apart and would tile the border too, rearranging your windows under Claude's clicks.
 - **Discord (or another Electron app) never looks dimmed:** it draws through DirectComposition, which ignores window transparency. For Discord, quit it fully (tray icon → Quit), open `%APPDATA%\discord\settings.json` and set `"chromiumSwitches": { "disable-direct-composition": "1" }`, then start it again. It keeps GPU acceleration.
 - **A shortcut doesn't work:** another app already owns it. The tray names the conflict in a notification; rebind it with Alt+K.
 - **Something else:** right-click the tray icon → *Save diagnostics*, which writes `diag.txt` next to your config.

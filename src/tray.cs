@@ -626,6 +626,7 @@ namespace KomorebiTray
             Add("Session", "Search apps (launcher)", OpenAppsCommand);
             Add("Session", "Open default web browser", OpenBrowserCommand);
             Add("Session", "Open komorebi settings", OpenSettingsCommand);
+            Add("Session", "Open volume mixer", OpenVolumeCommand);
 
             RunApp = new ActionDef { Group = "Other", Label = "Open an app / run a command", Command = "", FreeText = true, Hint = "e.g.  wt   or   firefox   or   explorer" };
             CustomKomorebic = new ActionDef { Group = "Other", Label = "Other komorebic command", Command = "komorebic", FreeText = true, Hint = "e.g.  toggle-tiling" };
@@ -648,6 +649,7 @@ namespace KomorebiTray
         public static string OpenAppsCommand { get { return OpenEditorCommand.Replace(" --shortcuts", " --apps"); } }
         public static string OpenBrowserCommand { get { return OpenEditorCommand.Replace(" --shortcuts", " --browser"); } }
         public static string OpenSettingsCommand { get { return OpenEditorCommand.Replace(" --shortcuts", " --settings"); } }
+        public static string OpenVolumeCommand { get { return OpenEditorCommand.Replace(" --shortcuts", " --volume"); } }
 
         public static ActionDef Match(string cmd, out int option, out string text)
         {
@@ -660,7 +662,8 @@ namespace KomorebiTray
                     || (a.Label == "Open keyboard shortcuts editor" && c.Contains("komorebi-tray") && c.Contains("--shortcuts"))
                     || (a.Label == "Search apps (launcher)" && c.Contains("komorebi-tray") && c.Contains("--apps"))
                     || (a.Label == "Open default web browser" && c.Contains("komorebi-tray") && c.Contains("--browser"))
-                    || (a.Label == "Open komorebi settings" && c.Contains("komorebi-tray") && c.Contains("--settings"))) return a; continue; }
+                    || (a.Label == "Open komorebi settings" && c.Contains("komorebi-tray") && c.Contains("--settings"))
+                    || (a.Label == "Open volume mixer" && c.Contains("komorebi-tray") && c.Contains("--volume"))) return a; continue; }
                 for (int i = 0; i < a.Values.Length; i++)
                     if (string.Equals(c, a.Command + " " + a.Values[i], StringComparison.OrdinalIgnoreCase)) { option = i; return a; }
             }
@@ -1983,7 +1986,7 @@ namespace KomorebiTray
 
     static class SettingCatalog
     {
-        public static readonly string[] Sections = { "Gaps", "Borders", "Transparency", "Animation", "Behaviour", "Workspaces" };
+        public static readonly string[] Sections = { "Gaps", "Borders", "Transparency", "Animation", "Behaviour", "Volume mixer", "Workspaces" };
 
         static readonly string[] Easings = {
             "Linear", "EaseInSine", "EaseOutSine", "EaseInOutSine", "EaseInQuad", "EaseOutQuad", "EaseInOutQuad",
@@ -2044,6 +2047,9 @@ namespace KomorebiTray
                 E("Behaviour", "Across monitors", "When a window moves onto another monitor", "cross_monitor_move_behaviour", "Swap", new[] { "Swap", "Insert", "NoOp" }),
                 N("Behaviour", "Resize step", "How much one resize shortcut changes a window", "resize_delta", 50, 10, 300, 10, " px"),
                 S("Behaviour", "bool", "Pause shortcuts in fullscreen", "Games and fullscreen video keep every key", "tray." + TrayApp.PauseInFullscreenKey, true),
+
+                S("Volume mixer", "bool", "Show quiet apps", "Include apps with an open but silent audio stream", "tray." + MixerFlyout.PrefInactive, true),
+                E("Volume mixer", "Fill colour", "Colour of the level in the display", "tray." + MixerFlyout.PrefColour, "Ice", MixerFlyout.Colours),
             };
 
             var monitors = Json.Get(cfg, "monitors") as System.Collections.IList;
@@ -2192,7 +2198,7 @@ namespace KomorebiTray
                 Native.LauncherChrome(this, Theme.Accent);
                 Invalidate(true);
             }
-            else Json.Set(cfg, s.Path, value);
+            else if (!s.Path.StartsWith("tray.")) Json.Set(cfg, s.Path, value);
             changed = true;
             UpdateHint();
             view.Invalidate();
@@ -2949,6 +2955,64 @@ namespace KomorebiTray
 
     // A game or fullscreen video in front: a window without a title bar covering its whole monitor.
     // Maximized normal windows keep their title bar, so they don't count even with an auto-hiding taskbar.
+    // ---- Claude desktop
+    // Claude's window is frameless, so komorebi leaves it alone unless told to manage it. A
+    // manage_rules entry for claude.exe can't be used: it also catches the full-screen,
+    // click-through border Claude shows while it controls the computer (same exe, class and title),
+    // and komorebi would squeeze that into a tile under Claude's clicks. Instead the real window is
+    // recognised by its styles when it comes to the front (resizable frame, activatable, not
+    // click-through) and handed to komorebi with "komorebic manage". The overlay never qualifies.
+    static class ClaudeTiling
+    {
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+        [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
+        [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextLength(IntPtr h);
+
+        const int WS_THICKFRAME = 0x40000, WS_EX_TRANSPARENT = 0x20, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
+        static readonly HashSet<IntPtr> handed = new HashSet<IntPtr>();
+        static System.Windows.Forms.Timer settle;
+
+        public static void OnForeground(IntPtr hwnd)
+        {
+            try
+            {
+                if (hwnd == IntPtr.Zero || handed.Contains(hwnd) || !IsMainClaudeWindow(hwnd)) return;
+                // Let the focus change settle, then manage it only if it is still the window in front
+                if (settle != null) settle.Dispose();
+                settle = new System.Windows.Forms.Timer { Interval = 200 };
+                settle.Tick += (s, e) =>
+                {
+                    settle.Stop();
+                    if (GetForegroundWindow() != hwnd || !IsMainClaudeWindow(hwnd)) return;
+                    handed.RemoveWhere(h => !IsWindow(h));
+                    handed.Add(hwnd);
+                    Run.K("manage");
+                    Log.Write("Claude window handed to komorebi");
+                };
+                settle.Start();
+            }
+            catch (Exception ex) { Log.Write("claude tiling: " + ex.Message); }
+        }
+
+        static bool IsMainClaudeWindow(IntPtr h)
+        {
+            if (!IsWindowVisible(h) || IsIconic(h) || GetWindow(h, 4) != IntPtr.Zero) return false;   // GW_OWNER: owned popups aren't main windows
+            int style = GetWindowLong(h, -16), ex = GetWindowLong(h, -20);
+            if ((style & WS_THICKFRAME) == 0) return false;                                          // the overlay has no frame
+            if ((ex & (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)) != 0) return false; // click-through / never-focused layers
+            if (GetWindowTextLength(h) == 0) return false;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            try { using (var p = Process.GetProcessById((int)pid)) return string.Equals(p.ProcessName, "claude", StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
+    }
+
     static class FullscreenApp
     {
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
@@ -2995,7 +3059,7 @@ namespace KomorebiTray
         bool stopped, quitting;
         readonly List<DateTime> crashes = new List<DateTime>();
         readonly Control invoker = new Control();
-        EventWaitHandle openSignal, appsSignal, toggleSignal, diagSignal, settingsSignal;
+        EventWaitHandle openSignal, appsSignal, toggleSignal, diagSignal, settingsSignal, volumeSignal;
 
         public TrayApp(bool openShortcuts, bool openApps)
         {
@@ -3008,6 +3072,7 @@ namespace KomorebiTray
                 toggleSignal = Listen(Program.TogglePauseEvent, ToggleAll);
                 diagSignal = Listen(Program.DiagnosticsEvent, SaveDiagnostics);
                 settingsSignal = Listen(Program.SettingsEvent, ToggleSettings);
+                volumeSignal = Listen(Program.VolumeEvent, ToggleVolume);
             }
             catch (Exception ex) { Log.Write("signal: " + ex.Message); }
 
@@ -3035,6 +3100,8 @@ namespace KomorebiTray
             settingsItem = menu.Items.Add("Settings…", null, (s, e) => ToggleSettings());
             shortcutsItem = menu.Items.Add("Keyboard shortcuts…", null, (s, e) => OpenEditor());
             appsItem = menu.Items.Add("Apps…", null, (s, e) => ToggleApps());
+            // Not tied to komorebi, so it stays usable while tiling is stopped
+            menu.Items.Add("Volume mixer", null, (s, e) => MixerFlyout.Toggle(tray, false));   // under the tray icon
             menu.Items.Add("Save diagnostics", null, (s, e) => SaveDiagnostics());
             menu.Items.Add("Open config folder", null, (s, e) => Run.Shell("explorer.exe", "\"" + Paths.ConfigDir + "\""));
             menu.Items.Add(new ToolStripSeparator());
@@ -3131,7 +3198,11 @@ namespace KomorebiTray
             var prefs = AccentBorder.LoadPrefs();
             pauseInFullscreen = !prefs.TryGetValue(PauseInFullscreenKey, out v) || Convert.ToBoolean(v);
             if (foregroundHook != IntPtr.Zero) { CheckFullscreen(false); return; }
-            foregroundProc = (hook, ev, hwnd, obj, child, thread, time) => CheckFullscreen(true);
+            foregroundProc = (hook, ev, hwnd, obj, child, thread, time) =>
+            {
+                if (!stopped) ClaudeTiling.OnForeground(hwnd);
+                CheckFullscreen(true);
+            };
             foregroundHook = SetWinEventHook(3, 3, IntPtr.Zero, foregroundProc, 0, 0, 0x0000 | 0x0002);   // EVENT_SYSTEM_FOREGROUND; out of context, skip own process
             fullscreenRecheck = new System.Windows.Forms.Timer { Interval = 1500 };
             fullscreenRecheck.Tick += (s, e) => { fullscreenRecheck.Stop(); CheckFullscreen(false); };
@@ -3162,6 +3233,7 @@ namespace KomorebiTray
                 else if (c.Contains("--toggle-pause")) ToggleAll();
                 else if (c.Contains("--browser")) Run.OpenDefaultBrowser();
                 else if (c.Contains("--settings")) ToggleSettings();
+                else if (c.Contains("--volume")) ToggleVolume();
                 return;
             }
             if (c.Contains("taskkill") && c.Contains("whkd")) { ReloadHotkeys(); return; }   // old "restart whkd" binding
@@ -3169,6 +3241,10 @@ namespace KomorebiTray
             if (c.StartsWith("komorebic ", StringComparison.OrdinalIgnoreCase)) Run.K(c.Substring(10));
             else Run.Start("cmd.exe", "/c " + c, 0);
         }
+
+        // The volume mixer flyout (mixer.cs), centred under this tray icon
+        // From the shortcut (or --volume): top centre of the monitor under the mouse
+        void ToggleVolume() { MixerFlyout.Toggle(tray, true); }
 
         // ---- stop / start everything
 
@@ -3484,6 +3560,7 @@ namespace KomorebiTray
         public const string TogglePauseEvent = @"Local\KomorebiTrayTogglePause";
         public const string DiagnosticsEvent = @"Local\KomorebiTrayDiagnostics";
         public const string SettingsEvent = @"Local\KomorebiTraySettings";
+        public const string VolumeEvent = @"Local\KomorebiTrayVolume";
 
         [STAThread]
         static void Main(string[] args)
@@ -3494,6 +3571,7 @@ namespace KomorebiTray
             bool togglePause = Array.IndexOf(args, "--toggle-pause") >= 0;
             bool diagnostics = Array.IndexOf(args, "--diagnostics") >= 0;
             bool openSettings = Array.IndexOf(args, "--settings") >= 0;
+            bool openVolume = Array.IndexOf(args, "--volume") >= 0;
             bool created;
             using (var mutex = new Mutex(true, "KomorebiTrayController", out created))
             {
@@ -3502,7 +3580,7 @@ namespace KomorebiTray
                     // Tray already running: hand the request to it
                     // This process got the keypress, so it may hand foreground rights to the tray
                     // --toggle-pause does the same as the tray's Pause/Resume item (handy for scripts)
-                    string ev = openSettings ? SettingsEvent : diagnostics ? DiagnosticsEvent : togglePause ? TogglePauseEvent : openApps ? OpenAppsEvent : openShortcuts ? OpenShortcutsEvent : null;
+                    string ev = openVolume ? VolumeEvent : openSettings ? SettingsEvent : diagnostics ? DiagnosticsEvent : togglePause ? TogglePauseEvent : openApps ? OpenAppsEvent : openShortcuts ? OpenShortcutsEvent : null;
                     if (ev != null)
                         try
                         {
