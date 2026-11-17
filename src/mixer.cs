@@ -574,7 +574,7 @@ namespace KomorebiTray
 
         // ---- layout (the tray's menu style: one dark panel, accent outline, header, divider, rows, key-hint footer)
 
-        const int PanelW = 420, HeaderH = 44, MainBlockH = 100, AppRowH = 40, FooterH = 34;
+        const int PanelW = 380, HeaderH = 38, MainBlockH = 86, AppRowH = 34, FooterH = 30;
 
         RectangleF Panel { get { return new RectangleF(P(Pad), P(Pad), P(PanelW), screenRect.Height - P(Pad) * 2); } }
         float MainTop { get { return P(Pad) + P(HeaderH); } }
@@ -595,15 +595,15 @@ namespace KomorebiTray
             if (main != null)
             {
                 float cy = MainTop + P(MainBlockH) / 2;
-                parts.Add(new Part { Kind = PartKind.MainTrack, Device = main, Rect = new RectangleF(x + P(20), cy - P(18), P(230), P(36)) });
-                parts.Add(new Part { Kind = PartKind.OutputButton, Device = main, Rect = new RectangleF(x + P(266), cy - P(36), P(32), P(32)) });
-                parts.Add(new Part { Kind = PartKind.MuteButton, Device = main, Rect = new RectangleF(x + P(266), cy + P(4), P(32), P(32)) });
-                parts.Add(new Part { Kind = PartKind.Knob, Device = main, Rect = Circle(x + P(PanelW - 60), cy, P(40)) });
+                parts.Add(new Part { Kind = PartKind.MainTrack, Device = main, Rect = new RectangleF(x + P(18), cy - P(15), P(204), P(30)) });
+                parts.Add(new Part { Kind = PartKind.OutputButton, Device = main, Rect = new RectangleF(x + P(236), cy - P(31), P(28), P(28)) });
+                parts.Add(new Part { Kind = PartKind.MuteButton, Device = main, Rect = new RectangleF(x + P(236), cy + P(3), P(28), P(28)) });
+                parts.Add(new Part { Kind = PartKind.Knob, Device = main, Rect = Circle(x + P(PanelW - 52), cy, P(34)) });
                 float ay = AppsTop;
                 foreach (var a in main.Apps)
                 {
-                    parts.Add(new Part { Kind = PartKind.AppButton, Device = main, App = a, Rect = new RectangleF(x + P(14), ay + P(4), P(32), P(AppRowH - 8)) });
-                    parts.Add(new Part { Kind = PartKind.AppTrack, Device = main, App = a, Rect = new RectangleF(x + P(186), ay + P(4), P(PanelW - 186 - 64), P(AppRowH - 8)) });
+                    parts.Add(new Part { Kind = PartKind.AppButton, Device = main, App = a, Rect = new RectangleF(x + P(12), ay + P(3), P(28), P(AppRowH - 6)) });
+                    parts.Add(new Part { Kind = PartKind.AppTrack, Device = main, App = a, Rect = new RectangleF(x + P(162), ay + P(3), P(PanelW - 162 - 58), P(AppRowH - 6)) });
                     ay += P(AppRowH);
                 }
             }
@@ -711,7 +711,7 @@ namespace KomorebiTray
             lastFrame = now;
             bool moving = false;
 
-            float speed = closing ? 1 / 0.14f : 1 / 0.24f;
+            float speed = closing ? 1 / 0.16f : 1 / 0.26f;
             openT = closing ? Math.Max(0, openT - dt * speed) : Math.Min(1, openT + dt * speed);
             if (openT != (closing ? 0 : 1)) moving = true;
 
@@ -762,14 +762,9 @@ namespace KomorebiTray
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                // Entrance: drop in from 8px above and grow from 97% (no transform at rest, so the final frame is pixel-exact)
-                if (e < 0.999f)
-                {
-                    float sc = 0.97f + 0.03f * e;
-                    g.TranslateTransform(W / 2f, P(Pad));
-                    g.ScaleTransform(sc, sc);
-                    g.TranslateTransform(-W / 2f, -P(Pad) - P(8) * (1 - e));
-                }
+                // Entrance: slides down from 10px above while it sharpens and fades in; the exit is the same in
+                // reverse. No transform at rest, so the final frame is pixel-exact.
+                if (e < 0.999f) g.TranslateTransform(0, (float)Math.Round(-P(10) * (1 - e)));
 
                 var panel = Panel;
                 DrawPanel(g, panel);
@@ -787,8 +782,8 @@ namespace KomorebiTray
                     {
                         if (p.App != null) continue;
                         if (p.Kind == PartKind.MainTrack) Display(g, p);
-                        else if (p.Kind == PartKind.OutputButton) SquareButton(g, p, "", devices.Count > 1, false);
-                        else if (p.Kind == PartKind.MuteButton) SquareButton(g, p, main.Muted ? "" : "", true, main.Muted);
+                        else if (p.Kind == PartKind.OutputButton) SquareButton(g, p, "\uE7F5", devices.Count > 1, false);
+                        else if (p.Kind == PartKind.MuteButton) SquareButton(g, p, main.Muted ? "\uE74F" : "\uE767", true, main.Muted);
                         else if (p.Kind == PartKind.Knob) Knob(g, p);
                     }
                     if (main.Apps.Count > 0)
@@ -800,7 +795,55 @@ namespace KomorebiTray
                 }
                 DrawFooter(g, panel);
             }
+            int blur = (int)Math.Round((1 - e) * P(7));
+            if (blur > 0) BlurFrame(blur);
             Push((byte)Math.Round(255 * e));
+        }
+
+        // Box blur (three passes ≈ gaussian) on premultiplied pixels, so edges fade instead of darkening
+        void BlurFrame(int r)
+        {
+            int w = frame.Width, h = frame.Height;
+            var data = frame.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadWrite, PixelFormat.Format32bppPArgb);
+            var px = new int[w * h];
+            Marshal.Copy(data.Scan0, px, 0, px.Length);
+            var tmp = new int[px.Length];
+            for (int pass = 0; pass < 3; pass++)
+            {
+                BlurLines(px, tmp, w, h, r, true);
+                BlurLines(tmp, px, w, h, r, false);
+            }
+            Marshal.Copy(px, 0, data.Scan0, px.Length);
+            frame.UnlockBits(data);
+        }
+
+        static void BlurLines(int[] src, int[] dst, int w, int h, int r, bool horizontal)
+        {
+            int lines = horizontal ? h : w, len = horizontal ? w : h, div = r * 2 + 1;
+            for (int line = 0; line < lines; line++)
+            {
+                int a = 0, rr = 0, gg = 0, bb = 0;
+                for (int i = -r; i <= r; i++)
+                {
+                    int c = src[Index(line, i, w, len, horizontal)];
+                    a += (c >> 24) & 255; rr += (c >> 16) & 255; gg += (c >> 8) & 255; bb += c & 255;
+                }
+                for (int i = 0; i < len; i++)
+                {
+                    dst[Index(line, i, w, len, horizontal)] = ((a / div) << 24) | ((rr / div) << 16) | ((gg / div) << 8) | (bb / div);
+                    int add = src[Index(line, i + r + 1, w, len, horizontal)], sub = src[Index(line, i - r, w, len, horizontal)];
+                    a += ((add >> 24) & 255) - ((sub >> 24) & 255);
+                    rr += ((add >> 16) & 255) - ((sub >> 16) & 255);
+                    gg += ((add >> 8) & 255) - ((sub >> 8) & 255);
+                    bb += (add & 255) - (sub & 255);
+                }
+            }
+        }
+
+        static int Index(int line, int i, int w, int len, bool horizontal)
+        {
+            if (i < 0) i = 0; else if (i >= len) i = len - 1;
+            return horizontal ? line * w + i : i * w + line;
         }
 
         // The menus' window: dark panel, thin accent outline, soft shadow
@@ -831,9 +874,9 @@ namespace KomorebiTray
         // "Volume" in the dim header style of the other menus, the output's name on the right
         void DrawHeader(Graphics g, RectangleF panel)
         {
-            var hr = new RectangleF(panel.X + P(20), panel.Y, panel.Width - P(40), P(HeaderH));
-            using (var f = MonoFont(14, true))
-            using (var fd = MonoFont(12, false))
+            var hr = new RectangleF(panel.X + P(18), panel.Y, panel.Width - P(36), P(HeaderH));
+            using (var f = MonoFont(13, true))
+            using (var fd = MonoFont(11, false))
             using (var sf = new StringFormat { LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
             using (var sfr = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             using (var dim = new SolidBrush(Theme.Dim))
@@ -851,10 +894,10 @@ namespace KomorebiTray
         {
             float top = main == null ? MainTop + P(MainBlockH) : FooterTop;
             Divider(g, panel, top);
-            using (var f = MonoFont(11, false))
+            using (var f = MonoFont(10.5f, false))
             using (var sf = new StringFormat { LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
             using (var br = new SolidBrush(Theme.Dim))
-                Text(g, "↑↓ volume   ↻ turn knob   m mute   esc close", f, br, new RectangleF(panel.X + P(20), top, panel.Width - P(40), P(FooterH)), sf);
+                Text(g, "↑↓ volume   ↻ turn knob   m mute   esc close", f, br, new RectangleF(panel.X + P(18), top, panel.Width - P(36), P(FooterH)), sf);
         }
 
         // Recessed level display: dark well with a grey outline, flat accent level, % on the right
@@ -891,7 +934,7 @@ namespace KomorebiTray
                 }
             }
 
-            using (var f = MonoFont(13, true))
+            using (var f = MonoFont(12, true))
             using (var sf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
             {
                 bool overFill = inner.X + inner.Width * v > inner.Right - P(52);
@@ -949,7 +992,7 @@ namespace KomorebiTray
             bool muted = a.Muted;
             float cy = row.Y + row.Height / 2;
             // Icon (click to mute)
-            float sz = P(18);
+            float sz = P(16);
             var dest = new RectangleF(icon.Rect.X + (icon.Rect.Width - sz) / 2, cy - sz / 2, sz, sz);
             float alpha = muted ? 0.35f : 1f;
             if (a.Icon != null)
@@ -968,10 +1011,10 @@ namespace KomorebiTray
                     g.DrawLine(pen, dest.Left + P(1), dest.Bottom - P(1), dest.Right - P(1), dest.Top + P(1));
 
             // Name
-            using (var f = MonoFont(12.5f, true))
+            using (var f = MonoFont(12f, true))
             using (var sf = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             using (var br = new SolidBrush(muted ? Theme.Dim : Theme.Text))
-                Text(g, a.Name, f, br, new RectangleF(row.X + P(46), row.Y, P(128), row.Height), sf);
+                Text(g, a.Name, f, br, new RectangleF(row.X + P(40), row.Y, P(112), row.Height), sf);
 
             // Slider (thin track, accent fill, white round thumb)
             var tr = track.Rect;
@@ -983,12 +1026,12 @@ namespace KomorebiTray
             if (tx > x0 + P(1))
                 using (var path = Rounded(new RectangleF(x0, cy - th / 2, tx - x0, th), th / 2))
                 using (var br = new SolidBrush(muted ? Color.FromArgb(96, 96, 104) : fillB)) g.FillPath(br, path);
-            float tr2 = P(7) + P(1.5f) * Math.Max(track.HoverT, track.PressT);
+            float tr2 = P(6) + P(1.5f) * Math.Max(track.HoverT, track.PressT);
             using (var br = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillEllipse(br, tx - tr2, cy - tr2 + P(1), tr2 * 2, tr2 * 2);
             using (var br = new SolidBrush(muted ? Color.FromArgb(170, 170, 176) : Color.White)) g.FillEllipse(br, tx - tr2, cy - tr2, tr2 * 2, tr2 * 2);
 
             // %
-            using (var f = MonoFont(12.5f, true))
+            using (var f = MonoFont(12f, true))
             using (var sf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
             using (var br = new SolidBrush(muted ? Theme.Dim : Theme.Text))
                 Text(g, Math.Round(a.Volume * 100) + "%", f, br, new RectangleF(tr.Right, row.Y, row.Right - tr.Right - P(12), row.Height), sf);
@@ -1042,7 +1085,7 @@ namespace KomorebiTray
             using (var pen = new Pen(lg, P(1))) g.DrawEllipse(pen, cap);
 
             // Centre well
-            float rw = P(12);
+            float rw = P(10);
             var well = new RectangleF(cx - rw, cy - rw, rw * 2, rw * 2);
             using (var lg = new LinearGradientBrush(well, Color.FromArgb(8, 8, 9), Color.FromArgb(24, 24, 26), 90f))
                 g.FillEllipse(lg, well);

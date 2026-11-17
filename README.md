@@ -41,7 +41,7 @@ komorebi does the tiling. komorebi-tray wraps it in a keyboard-first desktop exp
 
 **Alt+Shift+T: volume mixer.** In the same style as the other menus: the default output's level, output switch and mute, a rotary knob, and one slider per app.
 
-<img src="docs/screenshots/volume-mixer.png" width="422" alt="Volume mixer">
+<img src="docs/screenshots/volume-mixer.png" width="382" alt="Volume mixer">
 
 **Alt+C: settings.** Every komorebi.json option the tray knows, in plain English, grouped into sections. Dependent settings dim when their switch is off, and the search box finds anything across sections.
 
