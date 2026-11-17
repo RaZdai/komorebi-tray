@@ -14,8 +14,8 @@ using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("komorebi-tray")]
 [assembly: System.Reflection.AssemblyProduct("komorebi-tray")]
-[assembly: System.Reflection.AssemblyVersion("1.5.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.5.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.5.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.5.1.0")]
 
 namespace KomorebiTray
 {
@@ -3882,7 +3882,7 @@ namespace KomorebiTray
         public const string SettingsEvent = @"Local\KomorebiTraySettings";
         public const string VolumeEvent = @"Local\KomorebiTrayVolume";
         public const string BatteriesEvent = @"Local\KomorebiTrayBatteries";
-        public const string Version = "1.5.0";
+        public const string Version = "1.5.1";
 
         [STAThread]
         static void Main(string[] args)

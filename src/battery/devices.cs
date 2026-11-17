@@ -82,6 +82,8 @@ namespace KomorebiTray
             CoolerMasterDriver.Poll,
             ControllerDrivers.PollPlayStation,
             ControllerDrivers.PollSteamController,
+            SwitchDriver.Poll,            // komorebi-tray: Switch Pro protocol (8BitDo pads in Switch mode, Joy-Con)
+            EightBitDoDriver.Poll,        // komorebi-tray: 8BitDo pads on their 2.4 GHz dongle (no level there)
             GameSirDriver.Poll,
             FlydigiDriver.Poll,
             GameSirDriver.PollCyclone,
@@ -124,6 +126,7 @@ namespace KomorebiTray
             foreach (HidColl c in Hid.Enumerate())
                 sb.AppendFormat("{0:X4}:{1:X4}  {2,2}  {3:X4}:{4:X4}    {5,3} {6,3} {7,3}   {8}\n", c.Vid, c.Pid, c.Iface, c.Page, c.Usage, c.InLen, c.OutLen, c.FeatLen, Hid.Product(c));
             sb.Append(MiscMiceDriver.DumpXentaFrames());
+            sb.Append(EightBitDoDriver.DumpFrames());
             return sb.ToString();
         }
 

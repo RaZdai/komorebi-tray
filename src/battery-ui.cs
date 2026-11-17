@@ -358,7 +358,7 @@ namespace KomorebiTray
             if (s.LevelText.Length > 0 && s.Percent >= 0) t = s.LevelText;
             else if (s.Percent >= 0) t = s.Percent + "%";
             else if (e.LastPct >= 0) t = e.LastPct + "% (last known)";
-            else t = "unknown";
+            else t = s.Detail.Length > 0 ? "no level: " + s.Detail : "unknown";
             if (s.Detail.Length > 0 && s.Percent >= 0) t += " (" + s.Detail + ")";
             if (s.Charging) t += ", charging";
             if (s.Asleep) t += ", asleep";
@@ -421,7 +421,7 @@ namespace KomorebiTray
             var tip = new StringBuilder();
             foreach (Shown d in Current)
             {
-                if (!d.S.Connected || d.Hidden) continue;
+                if (!d.S.Connected || d.Hidden || (d.S.NeedsLevel && d.Percent < 0)) continue;
                 items.Add(new TaskbarWidget.Item
                 {
                     Kind = d.S.Kind, Percent = d.Percent, Text = d.S.Percent >= 0 ? d.S.LevelText : "", Charging = d.S.Charging,
@@ -440,7 +440,7 @@ namespace KomorebiTray
             if (!TrayIconsWanted) { if (trayIcons != null) { trayIcons.Dispose(); trayIcons = null; } return; }
             if (trayIcons == null) trayIcons = new TrayIconSet(ShowMenu);
             var list = new List<Shown>();
-            foreach (Shown d in Current) if (d.S.Connected && !d.Hidden) list.Add(d);
+            foreach (Shown d in Current) if (d.S.Connected && !d.Hidden && !(d.S.NeedsLevel && d.Percent < 0)) list.Add(d);
             trayIcons.Show(list, light, Low);
         }
 

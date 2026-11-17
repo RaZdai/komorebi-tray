@@ -32,6 +32,7 @@ namespace KomorebiTray
         public bool Connected = true;  // false: receiver present, device switched off (hidden)
         public int Millivolts;         // battery voltage when reported (0 = unknown)
         public int GraceSec;           // keep showing the last value this long if the device stops answering
+        public bool NeedsLevel;        // komorebi-tray: listed in the menu and window, but on the taskbar only once a level is known
 
         public DeviceStatus Copy() { return (DeviceStatus)MemberwiseClone(); }
     }

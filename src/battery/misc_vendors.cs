@@ -238,7 +238,10 @@ namespace KomorebiTray
 
     static class SonixDriver
     {
-        static readonly ushort[][] Dongles = { new ushort[] { 0x05AC, 0x024F }, new ushort[] { 0x0C45, 0xFEFE } };
+        // komorebi-tray adds the AJAZZ AK820 Pro's own dongle (0C45:FDFD): same FF60 channel, framing and checksum
+        // (github.com/igordev96/AJAZZ-AK820-Pro-Driver, docs/01-protocol.md section 13)
+        static readonly ushort[][] Dongles = { new ushort[] { 0x05AC, 0x024F }, new ushort[] { 0x0C45, 0xFEFE }, new ushort[] { 0x0C45, 0xFDFD } };
+        const string Ak820Key = "sonix:ak820pro";
         const int Len = 32;   // payload bytes after the report id; the last one is the checksum
 
         static byte Sum(byte[] b, int from, int n)
@@ -283,7 +286,7 @@ namespace KomorebiTray
             {
                 ushort vid = vp[0], pid = vp[1];
                 if (ctx.IsClaimed(vid, pid)) continue;
-                foreach (HidColl c in ctx.Find(vid, pid, x => x.Iface == 3 && x.Page == 0xFF60 && x.Usage == 0x0061 && x.OutLen == 1 + Len && x.InLen == 1 + Len))
+                foreach (HidColl c in ctx.Find(vid, pid, x => (x.Iface == 3 || pid == 0xFDFD) && x.Page == 0xFF60 && x.Usage == 0x0061 && x.OutLen == 1 + Len && x.InLen == 1 + Len))
                 {
                     int level;
                     using (var d = new HidDev())
@@ -293,13 +296,38 @@ namespace KomorebiTray
                         if (level < 0) level = QueryLevel(d);
                     }
                     if (level < 0) continue;
-                    var s = new DeviceStatus { Key = "sonix:" + Bat.Hex4(vid) + ":" + Bat.Hex4(pid), Name = KeyboardName(c), Kind = DeviceKind.Keyboard, Via = "2.4 GHz receiver" };
+                    bool ak820 = pid == 0xFDFD;
+                    var s = new DeviceStatus { Key = ak820 ? Ak820Key : "sonix:" + Bat.Hex4(vid) + ":" + Bat.Hex4(pid), Name = ak820 ? "AJAZZ AK820 Pro" : KeyboardName(c), Kind = DeviceKind.Keyboard, Via = "2.4 GHz receiver" };
                     s.Connected = level >= 1 && level <= 100;   // 0: keyboard off, out of range or in another mode
                     if (s.Connected) s.Percent = level;
                     s.GraceSec = 1800;   // keep the last value if a sleeping keyboard stops answering
                     ctx.Add(s, vid, pid);
                     break;
                 }
+            }
+            PollAk820Wired(ctx);
+        }
+
+        // AJAZZ AK820 Pro on its USB cable (0C45:8009, 800A): the wired firmware has no battery command (its config
+        // channel, feature reports on FF13, only takes settings), and the cable charges it. Shown as charging under
+        // the same key as the 2.4 GHz reading, so the last level read over the dongle stays visible (dimmed).
+        // Over Bluetooth the keyboard's level comes from Windows (the Bluetooth fallback).
+        static void PollAk820Wired(PollContext ctx)
+        {
+            foreach (ushort pid in new ushort[] { 0x8009, 0x800A })
+            {
+                if (ctx.IsClaimed(0x0C45, pid)) continue;
+                bool found = false;
+                foreach (HidColl c in ctx.Find(0x0C45, pid, x => x.Page == 0xFF13 && x.Usage == 0x0001))
+                    if (Hid.Product(c).IndexOf("AK820", StringComparison.OrdinalIgnoreCase) >= 0) { found = true; break; }
+                if (!found) continue;
+                ctx.Out.RemoveAll(x => x.Key == Ak820Key);   // the dongle answers "not in 2.4 GHz mode" meanwhile
+                ctx.Add(new DeviceStatus
+                {
+                    Key = Ak820Key, Name = "AJAZZ AK820 Pro", Kind = DeviceKind.Keyboard, Via = "USB cable", Charging = true, NeedsLevel = true,
+                    Detail = "read in 2.4 GHz or Bluetooth mode",
+                }, 0x0C45, pid);
+                return;
             }
         }
     }

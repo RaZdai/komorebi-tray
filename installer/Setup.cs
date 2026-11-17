@@ -23,15 +23,15 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("komorebi-tray setup")]
 [assembly: AssemblyProduct("komorebi-tray")]
-[assembly: AssemblyVersion("1.5.0.0")]
-[assembly: AssemblyFileVersion("1.5.0.0")]
+[assembly: AssemblyVersion("1.5.1.0")]
+[assembly: AssemblyFileVersion("1.5.1.0")]
 
 namespace KomorebiTraySetup
 {
     static class Product
     {
         public const string Name = "komorebi-tray";
-        public const string Version = "1.5.0";
+        public const string Version = "1.5.1";
         public const string Publisher = "komorebi-tray contributors";
         public const string Url = "https://github.com/LGUG2Z/komorebi";
         public const string ElevatedTask = "komorebi (elevated)";
