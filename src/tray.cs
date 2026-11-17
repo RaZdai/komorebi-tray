@@ -149,6 +149,22 @@ namespace KomorebiTray
             return false;
         }
 
+        // True while the "komorebi (elevated)" task is still running (starting komorebi)
+        public static bool IsElevatedTaskRunning()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("schtasks.exe", "/query /tn \"" + ElevatedTask + "\" /fo csv /nh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+                using (var p = Process.Start(psi))
+                {
+                    string o = p.StandardOutput.ReadToEnd();
+                    p.WaitForExit(3000);
+                    return o.IndexOf("Running", StringComparison.OrdinalIgnoreCase) >= 0;
+                }
+            }
+            catch { return false; }
+        }
+
         public static void K(string args) { Start(Komorebic, args, 0); }
         public static void K(string args, int waitMs) { Start(Komorebic, args, waitMs); }
 
@@ -2991,7 +3007,7 @@ namespace KomorebiTray
         {
             try
             {
-                if (hwnd == IntPtr.Zero || !IsMainClaudeWindow(hwnd)) return;
+                if (hwnd == IntPtr.Zero || overlay != IntPtr.Zero || !IsMainClaudeWindow(hwnd)) return;
                 int kpid = KomorebiPid();
                 int to;
                 if (kpid == 0 || (handed.TryGetValue(hwnd, out to) && to == kpid)) return;   // komorebi not running, or already has it
@@ -3001,7 +3017,7 @@ namespace KomorebiTray
                 settle.Tick += (s, e) =>
                 {
                     settle.Stop();
-                    if (GetForegroundWindow() != hwnd || !IsMainClaudeWindow(hwnd)) return;
+                    if (GetForegroundWindow() != hwnd || overlay != IntPtr.Zero || !IsMainClaudeWindow(hwnd)) return;
                     int now = KomorebiPid();
                     if (now == 0) return;
                     foreach (var dead in new List<IntPtr>(handed.Keys)) if (!IsWindow(dead)) handed.Remove(dead);
@@ -3012,6 +3028,104 @@ namespace KomorebiTray
                 settle.Start();
             }
             catch (Exception ex) { Log.Write("claude tiling: " + ex.Message); }
+        }
+
+        // ---- while Claude controls the computer
+        // Claude then stretches its own window over the screen and keeps it on top, while komorebi would keep
+        // pushing it back into its tile: the two fight and the whole layout jumps. So for as long as Claude's
+        // full-screen click-through overlay is up, tiling is paused (unless it was already paused), and it
+        // resumes, putting every window back in its tile, when the overlay goes away.
+
+        [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+        [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+        const int WS_EX_LAYERED = 0x80000;
+        static IntPtr overlay;
+        static bool pausedForControl;
+        static System.Windows.Forms.Timer overlayCheck;
+
+        delegate bool EnumProc(IntPtr h, IntPtr l);
+        [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
+
+        // Catches an overlay that was already up (the tray or komorebi started while Claude was in control)
+        public static void ScanForControl()
+        {
+            if (overlay != IntPtr.Zero) return;
+            IntPtr found = IntPtr.Zero;
+            try { EnumWindows((h, l) => { if (IsWindowVisible(h) && IsControlOverlay(h)) { found = h; return false; } return true; }, IntPtr.Zero); }
+            catch { }
+            if (found != IntPtr.Zero) { overlay = found; EnterControl(); }
+        }
+
+        public static void OnShowHide(uint ev, IntPtr hwnd, int obj)
+        {
+            if (obj != 0 || hwnd == IntPtr.Zero) return;
+            try
+            {
+                if (ev == 0x8002)   // shown
+                {
+                    if (overlay == IntPtr.Zero && IsControlOverlay(hwnd)) { overlay = hwnd; EnterControl(); }
+                }
+                else if (hwnd == overlay) { overlay = IntPtr.Zero; ExitControl(); }   // hidden or destroyed
+            }
+            catch (Exception ex) { Log.Write("claude control: " + ex.Message); }
+        }
+
+        static bool IsControlOverlay(IntPtr h)
+        {
+            int ex = GetWindowLong(h, -20), style = GetWindowLong(h, -16);
+            if ((ex & (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_LAYERED)) != (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_LAYERED)) return false;
+            if ((style & WS_THICKFRAME) != 0) return false;
+            RECT r;
+            if (!GetWindowRect(h, out r)) return false;
+            var m = Screen.FromHandle(h).Bounds;
+            if (r.Left > m.Left || r.Top > m.Top || r.Right < m.Right || r.Bottom < m.Bottom) return false;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            try { using (var p = Process.GetProcessById((int)pid)) return string.Equals(p.ProcessName, "claude", StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
+
+        static void EnterControl()
+        {
+            if (KomorebiPid() == 0) return;
+            if (IsPaused()) { Log.Write("Claude is controlling the computer; tiling was already paused"); return; }
+            Run.K("toggle-pause", 2000);
+            pausedForControl = true;
+            Log.Write("Claude is controlling the computer: tiling paused");
+            // If the overlay vanishes without a hide event (Claude closed or crashed), still resume
+            if (overlayCheck == null)
+            {
+                overlayCheck = new System.Windows.Forms.Timer { Interval = 3000 };
+                overlayCheck.Tick += (s, e) => { if (overlay == IntPtr.Zero || !IsWindow(overlay) || !IsWindowVisible(overlay)) { overlay = IntPtr.Zero; ExitControl(); } };
+            }
+            overlayCheck.Start();
+        }
+
+        static void ExitControl()
+        {
+            if (overlayCheck != null) overlayCheck.Stop();
+            if (!pausedForControl) return;
+            pausedForControl = false;
+            if (KomorebiPid() != 0 && IsPaused()) Run.K("toggle-pause", 2000);
+            Log.Write("Claude stopped controlling the computer: tiling resumed");
+        }
+
+        // On quit: never leave komorebi paused because of Claude
+        public static void ReleaseControlPause() { overlay = IntPtr.Zero; ExitControl(); }
+
+        static bool IsPaused()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(Run.Komorebic, "state") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+                using (var p = Process.Start(psi))
+                {
+                    var outTask = p.StandardOutput.ReadToEndAsync();
+                    if (!p.WaitForExit(3000)) return false;
+                    return System.Text.RegularExpressions.Regex.IsMatch(outTask.Result, "\"is_paused\"\\s*:\\s*true");
+                }
+            }
+            catch { return false; }
         }
 
         static bool IsMainClaudeWindow(IntPtr h)
@@ -3125,6 +3239,8 @@ namespace KomorebiTray
                 quitting = true;
                 Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnPreferenceChanged;
                 if (foregroundHook != IntPtr.Zero) UnhookWinEvent(foregroundHook);
+                if (showHook != IntPtr.Zero) UnhookWinEvent(showHook);
+                ClaudeTiling.ReleaseControlPause();
                 hotkeys.Clear();
                 Run.K("stop", 5000);
                 WaitForKomorebiExit();
@@ -3201,7 +3317,8 @@ namespace KomorebiTray
         [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, WinEventProc proc, uint pid, uint tid, uint flags);
         [DllImport("user32.dll")] static extern bool UnhookWinEvent(IntPtr hook);
         WinEventProc foregroundProc;    // kept in a field so the delegate isn't collected while Windows holds it
-        IntPtr foregroundHook;
+        IntPtr foregroundHook, showHook;
+        WinEventProc showProc;
         bool fullscreenPaused, pauseInFullscreen = true;
         System.Windows.Forms.Timer fullscreenRecheck;
 
@@ -3219,6 +3336,10 @@ namespace KomorebiTray
                 CheckFullscreen(true);
             };
             foregroundHook = SetWinEventHook(3, 3, IntPtr.Zero, foregroundProc, 0, 0, 0x0000 | 0x0002);   // EVENT_SYSTEM_FOREGROUND; out of context, skip own process
+            // Claude's "controlling your computer" overlay coming and going (EVENT_OBJECT_DESTROY..HIDE)
+            showProc = (hook, ev, hwnd, obj, child, thread, time) => ClaudeTiling.OnShowHide(ev, hwnd, obj);
+            showHook = SetWinEventHook(0x8001, 0x8003, IntPtr.Zero, showProc, 0, 0, 0x0000 | 0x0002);
+            ClaudeTiling.ScanForControl();
             fullscreenRecheck = new System.Windows.Forms.Timer { Interval = 1500 };
             fullscreenRecheck.Tick += (s, e) => { fullscreenRecheck.Stop(); CheckFullscreen(false); };
             CheckFullscreen(false);
@@ -3304,17 +3425,20 @@ namespace KomorebiTray
                 Process[] ps = Process.GetProcessesByName("komorebi");
                 int pid = ps.Length > 0 ? ps[0].Id : 0;
                 foreach (var p in ps) p.Dispose();
-                if (pid == 0 && ++tries <= 50) return;   // up to 15 s
+                if (pid == 0 && ++tries <= 100) return;   // up to 30 s: a start right after sign-in can be slow
                 t.Stop(); t.Dispose();
                 if (pid != 0)
                 {
                     Attach(pid);
-                    // A Claude window already in front is handed over now, not on its next activation
+                    // Claude already controlling the computer: keep tiling paused; otherwise a Claude window
+                    // already in front is handed over now, not on its next activation
+                    ClaudeTiling.ScanForControl();
                     ClaudeTiling.OnForeground(ClaudeTiling.Foreground());
                     return;
                 }
                 if (stopped || quitting) return;
-                if (attempt < 2)
+                // Only start again when nothing is still on its way (the elevated task or komorebic itself)
+                if (attempt < 1 && !Run.IsRunning("komorebic") && !Run.IsRunning("komorebic-no-console") && !Run.IsElevatedTaskRunning())
                 {
                     Log.Write("komorebi didn't start; starting it again");
                     WindowFixer.ClearKomorebiTransparency();
@@ -3323,7 +3447,7 @@ namespace KomorebiTray
                 }
                 else
                 {
-                    Log.Write("komorebi didn't start after 3 tries");
+                    Log.Write("komorebi didn't start");
                     tray.ShowBalloonTip(4000, "komorebi", "komorebi didn't start. Click the tray icon twice to try again.", ToolTipIcon.Warning);
                 }
             };
