@@ -6,11 +6,11 @@
 
 <p align="center">
   An Omarchy-inspired companion for the <a href="https://github.com/LGUG2Z/komorebi">komorebi</a> tiling window manager on Windows:<br>
-  built-in hotkeys, a keybind editor, a settings screen and an app launcher, all in one small tray app.
+  built-in hotkeys, a keybind editor, a settings screen, an app launcher and a volume mixer, all in one small tray app.
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/keybinds.png" width="720" alt="Alt+K keybind editor">
+  <img src="docs/screenshots/keybinds.png" width="760" alt="Alt+K keybind editor">
 </p>
 
 > [!NOTE]
@@ -29,7 +29,8 @@ komorebi does the tiling. komorebi-tray wraps it in a keyboard-first desktop exp
 | **Launching apps** | Start menu | **Alt+Space**: a launcher that searches every installed app, with icons, and keeps no history |
 | **Volume** | Windows' quick settings | **Alt+Shift+T**: a compact mixer for your output and every app playing sound, built into the tray |
 | **Turning it off** | `komorebic stop` (hotkeys keep running) | One click on the tray icon stops or starts *everything*: tiling, borders, hotkeys and menus |
-| **Crashes** | Windows can be left semi-transparent or untileable | The tray clears leftover transparency and restarts komorebi automatically |
+| **Claude desktop** | Its frameless window is left floating | Tiled while you chat or code; tiling pauses while Claude controls the computer, so nothing fights its window |
+| **Crashes** | Windows can be left semi-transparent or untileable | The tray clears leftover transparency and restarts komorebi automatically, and starts it again if it doesn't come up after sign-in |
 | **Admin apps** | Can't be tiled unless komorebi runs elevated | Optional admin mode, set up once by the installer; no UAC prompt at each start |
 | **Look** | Your own config | A tuned default: gaps, rounded orange borders, focus transparency and smooth animations. The focused border can follow your Windows accent colour |
 
@@ -37,19 +38,23 @@ komorebi does the tiling. komorebi-tray wraps it in a keyboard-first desktop exp
 
 **Alt+K: keybindings.** Type to filter. Press Enter on a row and then the new keys to rebind it; Tab changes what a shortcut does.
 
-<img src="docs/screenshots/keybinds-search.png" width="640" alt="Keybind editor filtered by 'focus'">
+<img src="docs/screenshots/keybinds-search.png" width="680" alt="Keybind editor filtered by 'focus'">
 
 **Alt+Shift+T: volume mixer.** In the same style as the other menus: the default output's level, output switch and mute, a rotary knob, and one slider per app.
 
-<img src="docs/screenshots/volume-mixer.png" width="382" alt="Volume mixer">
+<img src="docs/screenshots/volume-mixer.png" width="432" alt="Volume mixer">
+
+**Alt+Space: app launcher.** Type a few letters of any installed app and press Enter. It shows icons and keeps no history.
+
+<img src="docs/screenshots/launcher.png" width="560" alt="App launcher filtered by 'windows'">
 
 **Alt+C: settings.** Every komorebi.json option the tray knows, in plain English, grouped into sections. Dependent settings dim when their switch is off, and the search box finds anything across sections.
 
-<img src="docs/screenshots/settings-borders.png" width="640" alt="Settings, Borders section">
+<img src="docs/screenshots/settings-borders.png" width="720" alt="Settings, Borders section">
 
-<img src="docs/screenshots/settings-animation.png" width="640" alt="Settings, Animation section">
+<img src="docs/screenshots/settings-animation.png" width="720" alt="Settings, Animation section">
 
-<img src="docs/screenshots/settings-picker.png" width="640" alt="Settings, picking an animation curve">
+<img src="docs/screenshots/settings-picker.png" width="720" alt="Settings, picking an animation curve">
 
 **The installer.**
 

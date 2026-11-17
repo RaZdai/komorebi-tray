@@ -3063,11 +3063,53 @@ namespace KomorebiTray
             {
                 if (ev == 0x8002)   // shown
                 {
-                    if (overlay == IntPtr.Zero && IsControlOverlay(hwnd)) { overlay = hwnd; EnterControl(); }
+                    if (overlay != IntPtr.Zero) return;
+                    if (IsControlOverlay(hwnd)) { overlay = hwnd; EnterControl(); return; }
+                    // Claude shows its overlay first and only then makes it full-screen and click-through,
+                    // so look again a moment after any of its windows appears
+                    uint pid;
+                    GetWindowThreadProcessId(hwnd, out pid);
+                    if (IsClaudePid(pid)) RecheckSoon();
                 }
                 else if (hwnd == overlay) { overlay = IntPtr.Zero; ExitControl(); }   // hidden or destroyed
             }
             catch (Exception ex) { Log.Write("claude control: " + ex.Message); }
+        }
+
+        static System.Windows.Forms.Timer recheck;
+        static int rechecks;
+
+        static void RecheckSoon()
+        {
+            if (recheck == null)
+            {
+                recheck = new System.Windows.Forms.Timer();
+                recheck.Tick += (s, e) =>
+                {
+                    ScanForControl();
+                    if (overlay != IntPtr.Zero || ++rechecks >= 3) recheck.Stop();
+                    else recheck.Interval = 900;
+                };
+            }
+            rechecks = 0;
+            recheck.Stop();
+            recheck.Interval = 300;
+            recheck.Start();
+        }
+
+        // Claude's process ids, refreshed at most every 5 s, so the many show events from other apps cost nothing
+        static readonly HashSet<uint> claudePids = new HashSet<uint>();
+        static DateTime claudePidsAt = DateTime.MinValue;
+
+        static bool IsClaudePid(uint pid)
+        {
+            if ((DateTime.UtcNow - claudePidsAt).TotalSeconds > 5)
+            {
+                claudePids.Clear();
+                foreach (var p in Process.GetProcessesByName("claude")) { claudePids.Add((uint)p.Id); p.Dispose(); }
+                claudePidsAt = DateTime.UtcNow;
+            }
+            return claudePids.Contains(pid);
         }
 
         static bool IsControlOverlay(IntPtr h)
@@ -3085,13 +3127,47 @@ namespace KomorebiTray
             catch { return false; }
         }
 
+        // Whether tiling is paused because of Claude, kept in komorebi-tray.json so a restarted tray still
+        // resumes it (and doesn't mistake that pause for one the user made)
+        const string PausedKey = "paused_for_claude";
+
+        static bool Marked()
+        {
+            object v;
+            return AccentBorder.LoadPrefs().TryGetValue(PausedKey, out v) && Convert.ToBoolean(v);
+        }
+
+        static void Mark(bool on)
+        {
+            var prefs = AccentBorder.LoadPrefs();
+            if (on) prefs[PausedKey] = true; else if (!prefs.Remove(PausedKey)) return;
+            AccentBorder.SavePrefs(prefs);
+        }
+
+        // At start-up: a pause left behind by an earlier tray whose Claude session has already ended
+        public static void ResumeIfLeftPaused()
+        {
+            if (overlay != IntPtr.Zero || !Marked()) return;
+            if (KomorebiPid() != 0 && IsPaused()) Run.K("toggle-pause", 2000);
+            Mark(false);
+            Log.Write("resumed tiling left paused for Claude");
+        }
+
         static void EnterControl()
         {
             if (KomorebiPid() == 0) return;
-            if (IsPaused()) { Log.Write("Claude is controlling the computer; tiling was already paused"); return; }
-            Run.K("toggle-pause", 2000);
-            pausedForControl = true;
-            Log.Write("Claude is controlling the computer: tiling paused");
+            if (IsPaused())
+            {
+                if (Marked()) { pausedForControl = true; Log.Write("Claude is controlling the computer: tiling stays paused"); }
+                else { Log.Write("Claude is controlling the computer; tiling was already paused"); return; }
+            }
+            else
+            {
+                Run.K("toggle-pause", 2000);
+                pausedForControl = true;
+                Mark(true);
+                Log.Write("Claude is controlling the computer: tiling paused");
+            }
             // If the overlay vanishes without a hide event (Claude closed or crashed), still resume
             if (overlayCheck == null)
             {
@@ -3107,6 +3183,7 @@ namespace KomorebiTray
             if (!pausedForControl) return;
             pausedForControl = false;
             if (KomorebiPid() != 0 && IsPaused()) Run.K("toggle-pause", 2000);
+            Mark(false);
             Log.Write("Claude stopped controlling the computer: tiling resumed");
         }
 
@@ -3340,6 +3417,7 @@ namespace KomorebiTray
             showProc = (hook, ev, hwnd, obj, child, thread, time) => ClaudeTiling.OnShowHide(ev, hwnd, obj);
             showHook = SetWinEventHook(0x8001, 0x8003, IntPtr.Zero, showProc, 0, 0, 0x0000 | 0x0002);
             ClaudeTiling.ScanForControl();
+            ClaudeTiling.ResumeIfLeftPaused();
             fullscreenRecheck = new System.Windows.Forms.Timer { Interval = 1500 };
             fullscreenRecheck.Tick += (s, e) => { fullscreenRecheck.Stop(); CheckFullscreen(false); };
             CheckFullscreen(false);
