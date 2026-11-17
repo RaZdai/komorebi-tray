@@ -13,6 +13,7 @@ alt + space               : komorebi-tray.exe --apps
 # Window state
 alt + t                   : komorebic toggle-float
 alt + shift + t           : komorebi-tray.exe --volume
+alt + shift + b           : komorebi-tray.exe --batteries
 alt + f                   : komorebic toggle-monocle
 alt + shift + f           : komorebic toggle-maximize
 alt + j                   : komorebic flip-layout horizontal

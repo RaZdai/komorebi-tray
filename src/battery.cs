@@ -35,6 +35,8 @@ namespace KomorebiTray
         public bool Charging, Asleep;   // Asleep: not answering right now, Percent is the last known value
         public string Note;             // shown in the menu when there is no level to show
 
+        public BatteryInfo Copy() { return (BatteryInfo)MemberwiseClone(); }
+
         public string LevelText()
         {
             if (Percent < 0) return Note ?? (Charging ? "charging" : "no reading");
@@ -255,7 +257,36 @@ namespace KomorebiTray
 
     interface IBatteryReader
     {
-        void Poll(List<HidInfo> hid, List<BatteryInfo> found);
+        // force: a device came or went, or the user asked for a new search; ask the hardware now
+        void Poll(List<HidInfo> hid, List<BatteryInfo> found, bool force);
+    }
+
+    // Readers that have to send the device a request (a radio round trip for wireless devices) ask at most every
+    // Interval seconds and repeat their last answer in between. Battery levels move slowly, so this keeps the
+    // radio traffic, and the device's own power use, negligible. A device that didn't answer (asleep) is asked
+    // again sooner, so its level is back shortly after it wakes up.
+    abstract class TimedReader : IBatteryReader
+    {
+        protected abstract int Interval { get; }
+        protected virtual int RetryInterval { get { return 60; } }
+        protected bool RetrySoon;
+        DateTime next = DateTime.MinValue;
+        List<BatteryInfo> cache = new List<BatteryInfo>();
+
+        public void Poll(List<HidInfo> hid, List<BatteryInfo> found, bool force)
+        {
+            if (force || DateTime.UtcNow >= next)
+            {
+                var fresh = new List<BatteryInfo>();
+                RetrySoon = false;
+                Read(hid, fresh);
+                cache = fresh;
+                next = DateTime.UtcNow.AddSeconds(RetrySoon ? Math.Min(RetryInterval, Interval) : Interval);
+            }
+            foreach (BatteryInfo b in cache) found.Add(b.Copy());
+        }
+
+        protected abstract void Read(List<HidInfo> hid, List<BatteryInfo> found);
     }
 
     static class Readers
@@ -303,7 +334,8 @@ namespace KomorebiTray
         readonly HashSet<int> fullScale = new HashSet<int>();
         bool scalesLoaded;
 
-        public void Poll(List<HidInfo> hid, List<BatteryInfo> found)
+        // Runs on every tick: it only reads what the receiver already sent, so it costs the mouse nothing
+        public void Poll(List<HidInfo> hid, List<BatteryInfo> found, bool force)
         {
             if (!scalesLoaded) LoadScales();
             var present = new HashSet<string>();
@@ -388,11 +420,9 @@ namespace KomorebiTray
 
         void SaveScales()
         {
-            var prefs = AccentBorder.LoadPrefs();
             var list = new List<object>();
             foreach (int c in fullScale) list.Add(c);
-            prefs[HundredScalePref] = list;
-            AccentBorder.SavePrefs(prefs);
+            AccentBorder.UpdatePrefs(prefs => prefs[HundredScalePref] = list);
         }
 
         public void Close() { foreach (var l in listeners.Values) l.Dev.Dispose(); listeners.Clear(); }
@@ -403,12 +433,13 @@ namespace KomorebiTray
     // not change the pad's input mode for games. Every reply (input report 21, and the full-mode report 30)
     // has the battery in the high nibble of byte 2: level 0/2/4/6/8 (empty..full) and bit 0 = charging.
     // From github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering (bluetooth_hid_notes, subcommands).
-    class SwitchReader : IBatteryReader
+    class SwitchReader : TimedReader
     {
         static readonly ushort[] Pids = { 0x2009, 0x2006, 0x2007 };   // Pro Controller, Joy-Con L / R
         int counter;
+        protected override int Interval { get { return 180; } }
 
-        public void Poll(List<HidInfo> hid, List<BatteryInfo> found)
+        protected override void Read(List<HidInfo> hid, List<BatteryInfo> found)
         {
             var done = new HashSet<string>();
             foreach (HidInfo c in hid)
@@ -418,21 +449,17 @@ namespace KomorebiTray
                 using (HidDevice dev = HidDevice.Open(c, 3))
                 {
                     if (dev == null) continue;
-                    var cmd = new byte[11];
-                    cmd[0] = 0x01; cmd[1] = (byte)(counter++ & 0x0F);
-                    cmd[2] = 0x00; cmd[3] = 0x01; cmd[4] = 0x40; cmd[5] = 0x40;   // neutral rumble, left
-                    cmd[6] = 0x00; cmd[7] = 0x01; cmd[8] = 0x40; cmd[9] = 0x40;   // neutral rumble, right
-                    cmd[10] = 0x02;                                                // subcommand: request device info
-                    if (!dev.Write(cmd, 500)) continue;
                     var r = new byte[Math.Max(c.InLen, 64)];
-                    DateTime until = DateTime.UtcNow.AddMilliseconds(700);
                     int battery = -1;
-                    while (DateTime.UtcNow < until)
+                    // A game or Steam that switched the pad to full reports (30) already gets the battery many
+                    // times a second: just listen, no request needed
+                    for (int i = 0; i < 4 && battery < 0; i++)
                     {
-                        int n = dev.Read(r, (int)Math.Max(1, (until - DateTime.UtcNow).TotalMilliseconds));
+                        int n = dev.Read(r, 40);
                         if (n <= 0) break;
-                        if (n >= 3 && (r[0] == 0x21 || r[0] == 0x30 || r[0] == 0x31)) { battery = r[2] >> 4; if (r[0] == 0x21) break; }
+                        if (n >= 3 && (r[0] == 0x30 || r[0] == 0x31)) battery = r[2] >> 4;
                     }
+                    if (battery < 0) battery = AskDeviceInfo(dev, r);
                     if (battery < 0) continue;
                     string name = c.Pid == 0x2006 ? "Joy-Con (L)" : c.Pid == 0x2007 ? "Joy-Con (R)" :
                         c.Product.IndexOf("8BitDo", StringComparison.OrdinalIgnoreCase) >= 0 ? c.Product : "Switch-mode controller";
@@ -446,13 +473,33 @@ namespace KomorebiTray
                 }
             }
         }
+
+        // Subcommand 02 (device info): the reply (report 21) carries the battery like every other report
+        int AskDeviceInfo(HidDevice dev, byte[] r)
+        {
+            var cmd = new byte[11];
+            cmd[0] = 0x01; cmd[1] = (byte)(counter++ & 0x0F);
+            cmd[2] = 0x00; cmd[3] = 0x01; cmd[4] = 0x40; cmd[5] = 0x40;   // neutral rumble, left
+            cmd[6] = 0x00; cmd[7] = 0x01; cmd[8] = 0x40; cmd[9] = 0x40;   // neutral rumble, right
+            cmd[10] = 0x02;
+            if (!dev.Write(cmd, 500)) return -1;
+            DateTime until = DateTime.UtcNow.AddMilliseconds(700);
+            int battery = -1;
+            while (DateTime.UtcNow < until)
+            {
+                int n = dev.Read(r, (int)Math.Max(1, (until - DateTime.UtcNow).TotalMilliseconds));
+                if (n <= 0) break;
+                if (n >= 3 && (r[0] == 0x21 || r[0] == 0x30 || r[0] == 0x31)) { battery = r[2] >> 4; if (r[0] == 0x21) break; }
+            }
+            return battery;
+        }
     }
 
     // 8BitDo pads on their 2.4 GHz dongle pose as a wired Xbox 360 pad, and the dongle's own vendor channel has
     // no published battery command. Listed so the menu says why there is no number, rather than nothing.
     class EightBitDoNote : IBatteryReader
     {
-        public void Poll(List<HidInfo> hid, List<BatteryInfo> found)
+        public void Poll(List<HidInfo> hid, List<BatteryInfo> found, bool force)
         {
             // Some of the dongle's interfaces report a status word ("IDLE") as their product name, so the name is
             // taken from whichever interface actually says 8BitDo
@@ -496,11 +543,12 @@ namespace KomorebiTray
     // byte. Command 20 01 asks for the battery; the reply starts 20 01 00 and the 4th byte is the percent.
     // The keyboard only answers while it is switched to 2.4 GHz mode.
     // From github.com/donglover69/sonix-keyboard-studio (README, "2.4G dongles").
-    class SonixDongleReader : IBatteryReader
+    class SonixDongleReader : TimedReader
     {
         static readonly int[][] Dongles = { new[] { 0x0C45, 0xFEFE }, new[] { 0x05AC, 0x024F } };
+        protected override int Interval { get { return 180; } }
 
-        public void Poll(List<HidInfo> hid, List<BatteryInfo> found)
+        protected override void Read(List<HidInfo> hid, List<BatteryInfo> found)
         {
             var done = new HashSet<string>();
             foreach (HidInfo c in hid)
@@ -538,7 +586,7 @@ namespace KomorebiTray
                                 if (r[o] == 0x20 && r[o + 1] == 0x01 && r[o + 2] == 0x00 && r[o + 3] <= 100) level = r[o + 3];
                         }
                     }
-                    if (level < 0) { b.Asleep = true; b.Note = "asleep, or not in 2.4 GHz mode"; }
+                    if (level < 0) { b.Asleep = true; b.Note = "asleep, or not in 2.4 GHz mode"; RetrySoon = true; }
                     else b.Percent = level;
                 }
                 done.Add(key);
@@ -554,22 +602,17 @@ namespace KomorebiTray
     // Battery Status (1000, function 0) or Battery Voltage (1001, function 0: millivolts). The name and kind come
     // from Device Name & Type (0005).
     // From Logitech's HID++ 2.0 feature documents and github.com/pwr-Solaar/Solaar (lib/logitech_receiver).
-    class LogitechReader : IBatteryReader
+    class LogitechReader : TimedReader
     {
+        protected override int Interval { get { return 180; } }
         static readonly ushort[] Receivers = { 0xC52B, 0xC531, 0xC532, 0xC534, 0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC548 };
         const byte SwId = 0x0A;
 
         class Known { public string Name; public DeviceKind Kind; public byte Unified, Status, Voltage; public bool Probed; }
         readonly Dictionary<string, Known> known = new Dictionary<string, Known>();
-        DateTime nextPoll = DateTime.MinValue;
-        readonly List<BatteryInfo> lastFound = new List<BatteryInfo>();
 
-        public void Poll(List<HidInfo> hid, List<BatteryInfo> found)
+        protected override void Read(List<HidInfo> hid, List<BatteryInfo> found)
         {
-            // Levels change slowly; asking every 2 minutes is plenty and keeps radio chatter low
-            if (DateTime.UtcNow < nextPoll) { found.AddRange(lastFound); return; }
-            nextPoll = DateTime.UtcNow.AddMinutes(2);
-            lastFound.Clear();
             var done = new HashSet<string>();
             foreach (HidInfo c in hid)
             {
@@ -581,11 +624,10 @@ namespace KomorebiTray
                 using (HidDevice dev = HidDevice.Open(c, 3))
                 {
                     if (dev == null) continue;
-                    if (receiver) { for (byte i = 1; i <= 6; i++) Ask(dev, c, i, devKey, lastFound); }
-                    else Ask(dev, c, 0xFF, devKey, lastFound);
+                    if (receiver) { for (byte i = 1; i <= 6; i++) Ask(dev, c, i, devKey, found); }
+                    else Ask(dev, c, 0xFF, devKey, found);
                 }
             }
-            found.AddRange(lastFound);
         }
 
         void Ask(HidDevice dev, HidInfo c, byte index, string devKey, List<BatteryInfo> found)
@@ -632,7 +674,7 @@ namespace KomorebiTray
                 b.Charging = (s[6] & 0x80) != 0;
             }
             else if (k.Unified == 0 && k.Status == 0 && k.Voltage == 0) return;   // no battery feature at all
-            else b.Asleep = true;
+            else { b.Asleep = true; RetrySoon = true; }
             found.Add(b);
         }
 
@@ -716,13 +758,14 @@ namespace KomorebiTray
     // charging flag. Devices differ in the transaction id they accept, so the known ones are tried in turn.
     // Status 02 in the reply means success.
     // From github.com/openrazer/openrazer (driver/razercommon.h, razerchromacommon.c).
-    class RazerReader : IBatteryReader
+    class RazerReader : TimedReader
     {
         static readonly byte[] Transactions = { 0x1F, 0x3F, 0x9F, 0xFF };
+        protected override int Interval { get { return 180; } }
         readonly Dictionary<ushort, byte> transactionFor = new Dictionary<ushort, byte>();
         readonly HashSet<ushort> noBattery = new HashSet<ushort>();
 
-        public void Poll(List<HidInfo> hid, List<BatteryInfo> found)
+        protected override void Read(List<HidInfo> hid, List<BatteryInfo> found)
         {
             var done = new HashSet<ushort>();
             foreach (HidInfo c in hid)
@@ -793,12 +836,13 @@ namespace KomorebiTray
     // Bluetooth report 31. Over Bluetooth only the full reports carry it; until a game or Steam switches the
     // pad to them it sends short reports without a battery.
     // From the Linux kernel, drivers/hid/hid-playstation.c.
-    class PlayStationReader : IBatteryReader
+    class PlayStationReader : TimedReader
     {
         static readonly ushort[] Ds4 = { 0x05C4, 0x09CC, 0x0BA0 };
         static readonly ushort[] DualSense = { 0x0CE6, 0x0DF2 };
+        protected override int Interval { get { return 60; } }   // only listens: nothing is sent to the pad
 
-        public void Poll(List<HidInfo> hid, List<BatteryInfo> found)
+        protected override void Read(List<HidInfo> hid, List<BatteryInfo> found)
         {
             foreach (HidInfo c in hid)
             {
@@ -857,12 +901,26 @@ namespace KomorebiTray
         [DllImport("xinput1_4.dll")] static extern uint XInputGetBatteryInformation(uint user, byte type, out BATTERY b);
         [DllImport("xinput1_4.dll")] static extern uint XInputGetState(uint user, out STATE s);
         bool unavailable;
+        DateTime next = DateTime.MinValue;
+        List<BatteryInfo> cache = new List<BatteryInfo>();
 
-        public void Poll(List<HidInfo> hid, List<BatteryInfo> found)
+        // A local call (the Xbox driver already knows the level), once a minute
+        public void Poll(List<HidInfo> hid, List<BatteryInfo> all, bool force)
+        {
+            if (force || DateTime.UtcNow >= next)
+            {
+                next = DateTime.UtcNow.AddSeconds(60);
+                cache = new List<BatteryInfo>();
+                Scan(all, cache);
+            }
+            foreach (BatteryInfo b in cache) all.Add(b.Copy());
+        }
+
+        void Scan(List<BatteryInfo> all, List<BatteryInfo> found)
         {
             if (unavailable) return;
             bool xboxOnBluetooth = false;
-            foreach (BatteryInfo f in found)
+            foreach (BatteryInfo f in all)
                 if (f.Via == "Bluetooth" && f.Name.IndexOf("Xbox", StringComparison.OrdinalIgnoreCase) >= 0) xboxOnBluetooth = true;
             try
             {
@@ -908,8 +966,9 @@ namespace KomorebiTray
     // Bluetooth devices Windows knows a battery level for (headphones, earbuds, Bluetooth mice, keyboards and
     // pads): Windows keeps it in a device property (the one Settings > Bluetooth & devices shows) on the
     // Bluetooth device's nodes. The name comes from the node of the device itself, found by its container id.
-    class BluetoothReader : IBatteryReader
+    class BluetoothReader : TimedReader
     {
+        protected override int Interval { get { return 60; } }   // reads what Windows already keeps: no radio traffic
         [StructLayout(LayoutKind.Sequential)] struct DEVINFO { public int cbSize; public Guid ClassGuid; public int DevInst; public IntPtr Reserved; }
         [StructLayout(LayoutKind.Sequential)] struct DEVPROPKEY { public Guid fmtid; public int pid; public DEVPROPKEY(string g, int p) { fmtid = new Guid(g); pid = p; } }
         [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr SetupDiGetClassDevs(IntPtr guid, string enumerator, IntPtr parent, int flags);
@@ -924,7 +983,7 @@ namespace KomorebiTray
         static DEVPROPKEY DeviceDesc = new DEVPROPKEY("A45C254E-DF1C-4EFD-8020-67D146A850E0", 2);
         static DEVPROPKEY ContainerId = new DEVPROPKEY("8C7ED206-3F8A-4827-B3AB-AE9E1FAEFC6C", 2);
 
-        public void Poll(List<HidInfo> hid, List<BatteryInfo> found)
+        protected override void Read(List<HidInfo> hid, List<BatteryInfo> found)
         {
             var names = new Dictionary<Guid, string>();
             var levels = new Dictionary<Guid, int>();
@@ -999,6 +1058,10 @@ namespace KomorebiTray
     }
 
     // ---- the poll thread
+    // Wakes every 15 s. Passive readers (the Xenta receiver's own broadcasts) run every time; readers that have
+    // to ask a device run on their own, longer schedule (TimedReader). The list of HID devices is only built
+    // again when Windows reports a device change, on a search, or every 10 minutes as a safety net, so an idle
+    // tick costs next to nothing.
 
     static class BatteryMonitor
     {
@@ -1012,23 +1075,44 @@ namespace KomorebiTray
         static readonly AutoResetEvent wake = new AutoResetEvent(false);
         static Thread thread;
         static volatile bool stopping;
+        static int forceNext, searchNext, hidDirty = 1;
+        static List<HidInfo> hid;
+        static DateTime hidAt;
+        static string hidSignature = "";
 
-        public static event Action<List<BatteryInfo>> Updated;   // raised on the battery thread
+        // Raised on the battery thread after every pass; the flag says whether it answers a search the user asked for
+        public static event Action<List<BatteryInfo>, bool> Updated;
 
         public static void Start()
         {
             if (thread != null) return;
+            stopping = false;
             thread = new Thread(Loop) { IsBackground = true, Name = "batteries", Priority = ThreadPriority.BelowNormal };
             thread.Start();
         }
 
-        public static void RefreshSoon() { wake.Set(); }
+        // Search for devices: build the device list again and ask every device now
+        public static void Search()
+        {
+            Interlocked.Exchange(ref hidDirty, 1);
+            Interlocked.Exchange(ref forceNext, 1);
+            Interlocked.Exchange(ref searchNext, 1);
+            wake.Set();
+        }
+
+        // Windows reported a device arriving or leaving
+        public static void DevicesChanged()
+        {
+            Interlocked.Exchange(ref hidDirty, 1);
+            wake.Set();
+        }
 
         public static void Stop()
         {
             stopping = true;
             wake.Set();
-            if (thread != null) thread.Join(3000);
+            if (thread != null && thread != Thread.CurrentThread) thread.Join(3000);
+            thread = null;
             xenta.Close();
         }
 
@@ -1036,39 +1120,61 @@ namespace KomorebiTray
         {
             while (!stopping)
             {
-                List<BatteryInfo> list;
-                try { list = PollOnce(); }
-                catch (Exception e) { Log.Write("batteries: " + e.Message); list = null; }
+                bool search = Interlocked.Exchange(ref searchNext, 0) == 1;
+                bool force = Interlocked.Exchange(ref forceNext, 0) == 1;
+                List<BatteryInfo> list = null;
+                try
+                {
+                    if (RefreshDeviceList()) force = true;   // something new is plugged in: ask it straight away
+                    list = PollOnce(force);
+                }
+                catch (Exception e) { Log.Write("batteries: " + e.Message); }
                 if (list != null && !stopping)
                 {
                     var h = Updated;
-                    if (h != null) try { h(list); } catch (Exception e) { Log.Write("batteries ui: " + e.Message); }
+                    if (h != null) try { h(list, search); } catch (Exception e) { Log.Write("batteries ui: " + e.Message); }
                 }
-                wake.WaitOne(30000);
+                wake.WaitOne(15000);
             }
+        }
+
+        // Returns true when the set of devices is different from last time
+        static bool RefreshDeviceList()
+        {
+            bool dirty = Interlocked.Exchange(ref hidDirty, 0) == 1;
+            if (!dirty && hid != null && (DateTime.UtcNow - hidAt).TotalMinutes < 10) return false;
+            hid = Hid.Enumerate();
+            hidAt = DateTime.UtcNow;
+            var keys = new List<string>();
+            foreach (HidInfo c in hid) keys.Add(Readers.Hex4(c.Vid) + Readers.Hex4(c.Pid) + c.Product);
+            keys.Sort(StringComparer.Ordinal);
+            string sig = string.Join("|", keys.ToArray());
+            bool changed = sig != hidSignature;
+            hidSignature = sig;
+            return changed;
         }
 
         [DllImport("kernel32.dll")] static extern bool AttachConsole(int pid);
 
-        // komorebi-tray.exe --batteries: one reading of every device, printed to the console it was started from
+        // komorebi-tray.exe --battery-list: one reading of every device, printed to the console it was started from
         public static void PrintOnce()
         {
             AttachConsole(-1);
-            List<BatteryInfo> list = PollOnce();
+            hid = Hid.Enumerate();
+            List<BatteryInfo> list = PollOnce(true);
             Console.WriteLine();
             if (list.Count == 0) Console.WriteLine("No wireless devices found.");
             foreach (BatteryInfo b in list)
-                Console.WriteLine(string.Format("{0,-34} {1,-30} {2}", b.Name, b.LevelText(), b.Via));
+                Console.WriteLine(string.Format("{0,-30} {1,-34} {2}", b.Name, b.LevelText(), b.Via));
             xenta.Close();
         }
 
-        static List<BatteryInfo> PollOnce()
+        static List<BatteryInfo> PollOnce(bool force)
         {
-            List<HidInfo> hid = Hid.Enumerate();
             var found = new List<BatteryInfo>();
             foreach (IBatteryReader r in readers)
             {
-                try { r.Poll(hid, found); }
+                try { r.Poll(hid ?? new List<HidInfo>(), found, force); }
                 catch (Exception e) { Log.Write("batteries " + r.GetType().Name + ": " + e.Message); }
             }
             LoadSaved();
@@ -1090,11 +1196,18 @@ namespace KomorebiTray
                 else if (b.Percent >= 0 && !b.Asleep)
                 {
                     if (!lastKnown.TryGetValue(b.Key, out old) || old.Percent != b.Percent || old.Name != b.Name) changed = true;
-                    lastKnown[b.Key] = b;
+                    lastKnown[b.Key] = b.Copy();
                 }
                 result.Add(b);
             }
             if (changed) Save();
+            // Devices with a level first, the lowest first; the ones without a reading at the end
+            result.Sort((a, b) =>
+            {
+                if ((a.Percent < 0) != (b.Percent < 0)) return a.Percent < 0 ? 1 : -1;
+                if ((int)a.Kind != (int)b.Kind) return ((int)a.Kind).CompareTo((int)b.Kind);
+                return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+            });
             return result;
         }
 
@@ -1133,9 +1246,7 @@ namespace KomorebiTray
             var map = new Dictionary<string, object>();
             foreach (var kv in lastKnown)
                 map[kv.Key] = new Dictionary<string, object> { { "percent", kv.Value.Percent }, { "name", kv.Value.Name ?? "" }, { "approx", kv.Value.Approx } };
-            var prefs = AccentBorder.LoadPrefs();
-            prefs[SavedPref] = map;
-            AccentBorder.SavePrefs(prefs);
+            AccentBorder.UpdatePrefs(prefs => prefs[SavedPref] = map);
         }
 
         // The name a device had when it was last read (readers that can't name a sleeping device use it)
@@ -1145,224 +1256,62 @@ namespace KomorebiTray
             BatteryInfo b;
             return lastKnown.TryGetValue(key, out b) && !string.IsNullOrEmpty(b.Name) ? b.Name : null;
         }
-    }
 
-    // ---- notification area
+        // ---- "report a device" details, copied from the Batteries window into a GitHub issue
 
-    // One small icon per device with its level drawn as a number, plus a Batteries submenu in the tray menu.
-    // Numbers turn red at the low mark, blue while charging, and grey while the device sleeps.
-    class BatteryTray : IDisposable
-    {
-        [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
-
-        public const string PrefIcons = "battery_icons", PrefWarn = "battery_warn", PrefLow = "battery_low";
-
-        readonly Control invoker;
-        readonly NotifyIcon main;
-        readonly ContextMenuStrip menu;
-        public readonly ToolStripMenuItem MenuItem;
-        readonly Dictionary<string, NotifyIcon> icons = new Dictionary<string, NotifyIcon>();
-        readonly Dictionary<string, IntPtr> handles = new Dictionary<string, IntPtr>();
-        readonly Dictionary<string, string> drawn = new Dictionary<string, string>();
-        readonly HashSet<string> warned = new HashSet<string>();
-        List<BatteryInfo> current = new List<BatteryInfo>();
-        bool showIcons = true, warn = true;
-        int low = 15;
-        bool disposed;
-
-        public BatteryTray(Control invoker, NotifyIcon main, ContextMenuStrip menu)
+        public static string Report(List<BatteryInfo> current)
         {
-            this.invoker = invoker; this.main = main; this.menu = menu;
-            MenuItem = new ToolStripMenuItem("Batteries");
-            MenuItem.DropDown.Renderer = menu.Renderer;
-            MenuItem.DropDown.BackColor = menu.BackColor;
-            MenuItem.DropDown.ForeColor = menu.ForeColor;
-            ((ToolStripDropDownMenu)MenuItem.DropDown).ShowImageMargin = false;
-            MenuItem.DropDownItems.Add("Looking for devices…").Enabled = false;
-            MenuItem.DropDownOpening += (s, e) => FillMenu();
-            LoadPrefs();
-            BatteryMonitor.Updated += OnUpdated;
-            BatteryMonitor.Start();
-        }
-
-        public void LoadPrefs()
-        {
-            var prefs = AccentBorder.LoadPrefs();
-            object v;
-            showIcons = !prefs.TryGetValue(PrefIcons, out v) || Convert.ToBoolean(v);
-            warn = !prefs.TryGetValue(PrefWarn, out v) || Convert.ToBoolean(v);
-            low = prefs.TryGetValue(PrefLow, out v) ? Math.Max(5, Math.Min(50, Convert.ToInt32(v))) : 15;
-            if (!disposed) Apply(current);
-        }
-
-        void OnUpdated(List<BatteryInfo> list)
-        {
-            try { invoker.BeginInvoke((MethodInvoker)(() => { if (!disposed) Apply(list); })); } catch { }
-        }
-
-        void Apply(List<BatteryInfo> list)
-        {
-            current = list;
-            var keep = new HashSet<string>();
-            foreach (BatteryInfo b in list)
-            {
-                if (b.Percent < 0) continue;
-                CheckLow(b);
-                if (!showIcons) continue;
-                keep.Add(b.Key);
-                NotifyIcon ni;
-                if (!icons.TryGetValue(b.Key, out ni))
-                {
-                    ni = new NotifyIcon { ContextMenuStrip = menu };
-                    icons[b.Key] = ni;
-                }
-                string tip = b.Name + ": " + b.LevelText();
-                ni.Text = tip.Length > 63 ? tip.Substring(0, 62) + "…" : tip;
-                string look = b.Percent + "|" + b.Charging + "|" + b.Asleep + "|" + (b.Percent <= low) + "|" + LightTaskbar() + "|" + SystemInformation.SmallIconSize.Width;
-                string was;
-                if (!drawn.TryGetValue(b.Key, out was) || was != look)
-                {
-                    Icon icon = Draw(b);
-                    if (icon != null)
-                    {
-                        ni.Icon = icon;
-                        IntPtr old;
-                        if (handles.TryGetValue(b.Key, out old)) DestroyIcon(old);
-                        handles[b.Key] = icon.Handle;
-                        drawn[b.Key] = look;
-                    }
-                }
-                ni.Visible = true;
-            }
-            var gone = new List<string>();
-            foreach (string k in icons.Keys) if (!keep.Contains(k)) gone.Add(k);
-            foreach (string k in gone) Remove(k);
-        }
-
-        void Remove(string key)
-        {
-            NotifyIcon ni;
-            if (icons.TryGetValue(key, out ni)) { ni.Visible = false; ni.Dispose(); icons.Remove(key); }
-            IntPtr h;
-            if (handles.TryGetValue(key, out h)) { DestroyIcon(h); handles.Remove(key); }
-            drawn.Remove(key);
-        }
-
-        // Once per drop below the mark; it re-arms after charging back above it
-        void CheckLow(BatteryInfo b)
-        {
-            if (b.Charging || b.Percent > low + 5) { warned.Remove(b.Key); return; }
-            if (!warn || b.Asleep || b.Percent > low || !warned.Add(b.Key)) return;
-            main.ShowBalloonTip(5000, "Low battery", b.Name + " is at " + b.LevelText() + ".", ToolTipIcon.Warning);
-        }
-
-        void FillMenu()
-        {
-            MenuItem.DropDownItems.Clear();
-            if (current.Count == 0) MenuItem.DropDownItems.Add("No wireless devices found").Enabled = false;
+            var sb = new StringBuilder();
+            sb.AppendLine("### Device");
+            sb.AppendLine("- Brand and model: ");
+            sb.AppendLine("- Connected by: 2.4 GHz dongle / Bluetooth / cable");
+            sb.AppendLine("- Battery the vendor app or the device itself shows: ");
+            sb.AppendLine();
+            sb.AppendLine("### System");
+            sb.AppendLine("- komorebi-tray " + Program.Version);
+            sb.AppendLine("- " + WindowsVersion());
+            sb.AppendLine();
+            sb.AppendLine("### What komorebi-tray reads");
+            int bt = 0;
             foreach (BatteryInfo b in current)
             {
-                var item = new ToolStripMenuItem(b.Name + "  —  " + b.LevelText());
-                item.ToolTipText = b.Via;
-                if (b.Percent < 0) item.ForeColor = Color.FromArgb(150, 150, 150);
-                else if (b.Percent <= low && !b.Charging) item.ForeColor = Color.FromArgb(255, 110, 100);
-                MenuItem.DropDownItems.Add(item);
+                if (b.Via == "Bluetooth") { bt++; continue; }   // Bluetooth names are often personal ("Alex's AirPods")
+                sb.AppendLine("- " + b.Name + ": " + b.LevelText() + " (" + b.Via + ")");
             }
-            MenuItem.DropDownItems.Add(new ToolStripSeparator());
-            MenuItem.DropDownItems.Add("Check again now", null, (s, e) => BatteryMonitor.RefreshSoon());
+            if (bt > 0) sb.AppendLine("- " + bt + " Bluetooth device" + (bt == 1 ? "" : "s") + " with a level from Windows");
+            if (current.Count == 0) sb.AppendLine("- nothing");
+            sb.AppendLine();
+            sb.AppendLine("### USB / HID devices");
+            sb.AppendLine("```");
+            var seen = new HashSet<string>();
+            List<HidInfo> list = hid ?? new List<HidInfo>();
+            foreach (HidInfo c in list)
+            {
+                if (c.Vid == 0) continue;
+                string line = string.Format("{0:X4}:{1:X4}  if {2,-2}  {3:X4}:{4:X4}  in {5,-3} out {6,-4} feat {7,-4} {8}",
+                    c.Vid, c.Pid, c.Interface < 0 ? "-" : c.Interface.ToString(), c.Page, c.Usage, c.InLen, c.OutLen, c.FeatLen, c.Product);
+                if (seen.Add(line)) sb.AppendLine(line);
+                if (seen.Count >= 80) { sb.AppendLine("…"); break; }
+            }
+            sb.AppendLine("```");
+            return sb.ToString();
         }
 
-        static bool LightTaskbar()
+        static string WindowsVersion()
         {
             try
             {
-                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                using (var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))
                 {
-                    object v = k != null ? k.GetValue("SystemUsesLightTheme") : null;
-                    return v is int && (int)v == 1;
+                    string build = Convert.ToString(k.GetValue("CurrentBuild"));
+                    int b;
+                    int.TryParse(build, out b);
+                    string name = Convert.ToString(k.GetValue("ProductName"));
+                    if (b >= 22000) name = name.Replace("Windows 10", "Windows 11");   // Windows 11 still says 10 here
+                    return name + " " + Convert.ToString(k.GetValue("DisplayVersion")) + " (build " + build + "." + Convert.ToString(k.GetValue("UBR")) + ")";
                 }
             }
-            catch { return false; }
-        }
-
-        // The level as one bold number filling the icon; 100 is drawn as a full battery mark instead of three digits
-        Icon Draw(BatteryInfo b)
-        {
-            try
-            {
-                int size = Math.Max(16, SystemInformation.SmallIconSize.Width), big = size * 4;
-                bool light = LightTaskbar();
-                Color fg = light ? Color.FromArgb(20, 20, 20) : Color.White;
-                if (b.Asleep) fg = light ? Color.FromArgb(130, 130, 130) : Color.FromArgb(140, 140, 146);
-                else if (b.Charging) fg = light ? Color.FromArgb(0, 110, 200) : Color.FromArgb(90, 190, 255);
-                else if (b.Percent <= low) fg = light ? Color.FromArgb(200, 30, 30) : Color.FromArgb(255, 90, 80);
-                using (var hi = new Bitmap(big, big, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
-                using (var final = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
-                {
-                    using (var g = Graphics.FromImage(hi))
-                    {
-                        g.SmoothingMode = SmoothingMode.AntiAlias;
-                        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                        g.Clear(Color.Transparent);
-                        // Charging shows as the blue colour (and in the tooltip): a bolt would cover the digits
-                        if (b.Percent >= 100) FullMark(g, big, fg);
-                        else Number(g, big, b.Percent.ToString(), fg);
-                    }
-                    using (var g = Graphics.FromImage(final))
-                    {
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                        g.CompositingQuality = CompositingQuality.HighQuality;
-                        g.DrawImage(hi, new Rectangle(0, 0, size, size));
-                    }
-                    return Icon.FromHandle(final.GetHicon());
-                }
-            }
-            catch (Exception e) { Log.Write("battery icon: " + e.Message); return null; }
-        }
-
-        static void Number(Graphics g, int big, string text, Color c)
-        {
-            // Largest bold size whose digits fit the square
-            float em = big * 0.95f;
-            using (var family = new FontFamily("Segoe UI"))
-            using (var path = new GraphicsPath())
-            {
-                path.AddString(text, family, (int)FontStyle.Bold, em, new PointF(0, 0), StringFormat.GenericTypographic);
-                RectangleF r = path.GetBounds();
-                float scale = Math.Min((big * 0.98f) / r.Width, (big * 0.80f) / r.Height);
-                using (var m = new Matrix())
-                {
-                    m.Translate(big / 2f, big / 2f);
-                    m.Scale(scale, scale);
-                    m.Translate(-(r.X + r.Width / 2), -(r.Y + r.Height / 2));
-                    path.Transform(m);
-                }
-                using (var brush = new SolidBrush(c)) g.FillPath(brush, path);
-            }
-        }
-
-        static void FullMark(Graphics g, int big, Color c)
-        {
-            float u = big / 16f;
-            var body = new RectangleF(1 * u, 4.5f * u, 12.5f * u, 7f * u);
-            using (var pen = new Pen(c, 1.4f * u))
-            using (var path = Theme.Round(body, 1.6f * u)) g.DrawPath(pen, path);
-            using (var brush = new SolidBrush(c))
-            {
-                g.FillRectangle(brush, 13.8f * u, 6.5f * u, 1.6f * u, 3f * u);
-                using (var fill = Theme.Round(new RectangleF(2.6f * u, 6.1f * u, 9.3f * u, 3.8f * u), 0.8f * u)) g.FillPath(brush, fill);
-            }
-        }
-
-        public void Dispose()
-        {
-            if (disposed) return;
-            disposed = true;
-            BatteryMonitor.Updated -= OnUpdated;
-            var keys = new List<string>(icons.Keys);
-            foreach (string k in keys) Remove(k);
-            BatteryMonitor.Stop();
+            catch { return Environment.OSVersion.VersionString; }
         }
     }
 }
