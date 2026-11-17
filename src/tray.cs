@@ -2002,7 +2002,7 @@ namespace KomorebiTray
 
     static class SettingCatalog
     {
-        public static readonly string[] Sections = { "Gaps", "Borders", "Transparency", "Animation", "Behaviour", "Volume mixer", "Workspaces" };
+        public static readonly string[] Sections = { "Gaps", "Borders", "Transparency", "Animation", "Behaviour", "Volume mixer", "Batteries", "Workspaces" };
 
         static readonly string[] Easings = {
             "Linear", "EaseInSine", "EaseOutSine", "EaseInOutSine", "EaseInQuad", "EaseOutQuad", "EaseInOutQuad",
@@ -2065,6 +2065,10 @@ namespace KomorebiTray
                 S("Behaviour", "bool", "Pause shortcuts in fullscreen", "Games and fullscreen video keep every key", "tray." + TrayApp.PauseInFullscreenKey, true),
 
                 S("Volume mixer", "bool", "Show quiet apps", "Include apps with an open but silent audio stream", "tray." + MixerFlyout.PrefInactive, true),
+
+                S("Batteries", "bool", "Battery icons", "A number per wireless device next to the komorebi icon", "tray." + BatteryTray.PrefIcons, true),
+                S("Batteries", "bool", "Low battery warning", "A notification when a device runs low", "tray." + BatteryTray.PrefWarn, true),
+                N("Batteries", "Low at", "Level that counts as low (turns the number red)", "tray." + BatteryTray.PrefLow, 15, 5, 50, 5, "%"),
             };
 
             var monitors = Json.Get(cfg, "monitors") as System.Collections.IList;
@@ -3262,6 +3266,7 @@ namespace KomorebiTray
         KeybindEditor editor;
         AppLauncher apps;
         SettingsEditor settingsWin;
+        BatteryTray batteries;
         bool stopped, quitting;
         readonly List<DateTime> crashes = new List<DateTime>();
         readonly Control invoker = new Control();
@@ -3308,6 +3313,9 @@ namespace KomorebiTray
             appsItem = menu.Items.Add("Apps…", null, (s, e) => ToggleApps());
             // Not tied to komorebi, so it stays usable while tiling is stopped
             menu.Items.Add("Volume mixer", null, (s, e) => MixerFlyout.Toggle(tray, false));   // under the tray icon
+            // Battery levels of wireless devices (battery.cs); also independent of komorebi
+            batteries = new BatteryTray(invoker, tray, menu);
+            menu.Items.Add(batteries.MenuItem);
             menu.Items.Add("Save diagnostics", null, (s, e) => SaveDiagnostics());
             menu.Items.Add("Open config folder", null, (s, e) => Run.Shell("explorer.exe", "\"" + Paths.ConfigDir + "\""));
             menu.Items.Add(new ToolStripSeparator());
@@ -3322,6 +3330,7 @@ namespace KomorebiTray
                 Run.K("stop", 5000);
                 WaitForKomorebiExit();
                 WindowFixer.ClearKomorebiTransparency();
+                batteries.Dispose();
                 tray.Visible = false;
                 ExitThread();
             });
@@ -3727,6 +3736,7 @@ namespace KomorebiTray
                 // The settings window already saved and had komorebi reload; just confirm it
                 if (saved && !stopped) tray.ShowBalloonTip(1500, "komorebi", "Settings applied", ToolTipIcon.Info);
                 WatchFullscreen();      // picks up the "Pause shortcuts in fullscreen" switch
+                if (batteries != null) batteries.LoadPrefs();   // battery icons / low-battery switches
                 Native.Trim();
             };
             settingsWin.Show();
@@ -3785,6 +3795,7 @@ namespace KomorebiTray
                 hotkeys.Clear();
                 hotkeys.DestroyHandle();
                 Unwatch();
+                if (batteries != null) batteries.Dispose();
                 tray.Dispose(); menu.Dispose(); invoker.Dispose();
                 TrayIcons.Release();
                 foreach (var ev in new[] { openSignal, appsSignal, toggleSignal, diagSignal, settingsSignal }) if (ev != null) ev.Dispose();
@@ -3806,6 +3817,7 @@ namespace KomorebiTray
         static void Main(string[] args)
         {
             if (Array.IndexOf(args, "--browser") >= 0) { Run.OpenDefaultBrowser(); return; }
+            if (Array.IndexOf(args, "--batteries") >= 0) { BatteryMonitor.PrintOnce(); return; }
             bool openShortcuts = Array.IndexOf(args, "--shortcuts") >= 0;
             bool openApps = Array.IndexOf(args, "--apps") >= 0;
             bool togglePause = Array.IndexOf(args, "--toggle-pause") >= 0;

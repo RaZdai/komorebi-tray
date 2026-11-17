@@ -13,7 +13,7 @@ New-Item -ItemType Directory -Force $build, $dist | Out-Null
 $tray = Join-Path $build 'komorebi-tray.exe'
 & $csc /nologo /optimize+ /target:winexe /platform:anycpu "/out:$tray" "/win32icon:$icon" "/win32manifest:$manifest" `
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
-    (Join-Path $root 'src\tray.cs') (Join-Path $root 'src\mixer.cs')
+    (Join-Path $root 'src\tray.cs') (Join-Path $root 'src\mixer.cs') (Join-Path $root 'src\battery.cs')
 if ($LASTEXITCODE -ne 0) { throw 'tray build failed' }
 
 # Workstation GC without the background thread: less memory for an app that is idle 99% of the time
