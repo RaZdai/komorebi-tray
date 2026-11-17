@@ -1,4 +1,4 @@
-﻿// komorebi tray controller + keyboard shortcut editor.
+// komorebi tray controller + keyboard shortcut editor.
 // Native WinForms (.NET Framework 4.x, C# 5) so it idles at a few MB instead of a PowerShell host.
 // Build with build.ps1 in this folder.
 using System;
@@ -14,8 +14,8 @@ using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("komorebi-tray")]
 [assembly: System.Reflection.AssemblyProduct("komorebi-tray")]
-[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.5.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.5.0.0")]
 
 namespace KomorebiTray
 {
@@ -2106,6 +2106,8 @@ namespace KomorebiTray
                 S("Volume mixer", "bool", "Show quiet apps", "Include apps with an open but silent audio stream", "tray." + MixerFlyout.PrefInactive, true),
 
                 E("Batteries", "Show levels", "Taskbar, numbers in the notification area, or hidden", "tray." + BatteryPrefs.Display, BatteryPrefs.Taskbar, BatteryPrefs.DisplayOptions),
+                S("Batteries", "bool", "Background behind taskbar text", "For taskbars made transparent by a theme", "tray." + BatteryPrefs.Background, false),
+                S("Batteries", "bool", "Hide last known / asleep devices", "Only devices with a current reading", "tray." + BatteryPrefs.HideLastKnown, false),
                 S("Batteries", "bool", "Low battery warning", "A notification when a device runs low", "tray." + BatteryPrefs.Warn, true),
                 N("Batteries", "Low at", "Level that counts as low (shown in red)", "tray." + BatteryPrefs.Low, 15, 5, 50, 5, "%"),
             };
@@ -3367,7 +3369,7 @@ namespace KomorebiTray
             menu.Items.Add("Volume mixer", null, (s, e) => MixerFlyout.Toggle(tray, false));   // under the tray icon
             // Battery levels of wireless devices (battery.cs, battery-ui.cs); also independent of komorebi
             menu.Items.Add("Batteries…", null, (s, e) => ToggleBatteries());
-            batteries = new BatteryTray(invoker, tray, menu, ToggleBatteries);
+            batteries = new BatteryTray(invoker, tray, ToggleBatteries);
             menu.Items.Add("Save diagnostics", null, (s, e) => SaveDiagnostics());
             menu.Items.Add("Open config folder", null, (s, e) => Run.Shell("explorer.exe", "\"" + Paths.ConfigDir + "\""));
             menu.Items.Add(new ToolStripSeparator());
@@ -3880,13 +3882,14 @@ namespace KomorebiTray
         public const string SettingsEvent = @"Local\KomorebiTraySettings";
         public const string VolumeEvent = @"Local\KomorebiTrayVolume";
         public const string BatteriesEvent = @"Local\KomorebiTrayBatteries";
-        public const string Version = "1.4.0";
+        public const string Version = "1.5.0";
 
         [STAThread]
         static void Main(string[] args)
         {
             if (Array.IndexOf(args, "--browser") >= 0) { Run.OpenDefaultBrowser(); return; }
-            if (Array.IndexOf(args, "--battery-list") >= 0) { BatteryMonitor.PrintOnce(); return; }
+            if (Array.IndexOf(args, "--battery-list") >= 0) { BatteryMonitor.PrintList(); return; }
+            if (Array.IndexOf(args, "--battery-dump") >= 0) { BatteryMonitor.PrintDump(); return; }
             bool openShortcuts = Array.IndexOf(args, "--shortcuts") >= 0;
             bool openApps = Array.IndexOf(args, "--apps") >= 0;
             bool togglePause = Array.IndexOf(args, "--toggle-pause") >= 0;

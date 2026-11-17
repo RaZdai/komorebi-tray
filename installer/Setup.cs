@@ -1,4 +1,4 @@
-﻿// komorebi-tray setup: one self-contained exe that installs, updates and uninstalls the tray.
+// komorebi-tray setup: one self-contained exe that installs, updates and uninstalls the tray.
 // The tray, its icon and the default config travel inside as embedded resources.
 // komorebi itself is never bundled: it is installed from its official winget package when missing.
 //
@@ -23,15 +23,15 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("komorebi-tray setup")]
 [assembly: AssemblyProduct("komorebi-tray")]
-[assembly: AssemblyVersion("1.4.0.0")]
-[assembly: AssemblyFileVersion("1.4.0.0")]
+[assembly: AssemblyVersion("1.5.0.0")]
+[assembly: AssemblyFileVersion("1.5.0.0")]
 
 namespace KomorebiTraySetup
 {
     static class Product
     {
         public const string Name = "komorebi-tray";
-        public const string Version = "1.4.0";
+        public const string Version = "1.5.0";
         public const string Publisher = "komorebi-tray contributors";
         public const string Url = "https://github.com/LGUG2Z/komorebi";
         public const string ElevatedTask = "komorebi (elevated)";
@@ -253,6 +253,9 @@ namespace KomorebiTraySetup
             Sys.WriteResource("komorebi-tray.exe.config", t.Exe + ".config");
             string icon = Path.Combine(t.TrayDir, "komorebi-tray.ico");
             Sys.WriteResource("komorebi-tray.ico", icon);
+            // HeadsetControl (GPL-3.0, github.com/Sapd/HeadsetControl): battery levels of many wired / wireless headsets
+            Sys.WriteResource("headsetcontrol.exe", Path.Combine(t.TrayDir, "headsetcontrol.exe"));
+            Sys.WriteResource("THIRD_PARTY_NOTICES.txt", Path.Combine(t.TrayDir, "THIRD_PARTY_NOTICES.txt"));
             string self = Application.ExecutablePath;
             if (!string.Equals(Path.GetFullPath(self), Path.GetFullPath(t.Uninstaller), StringComparison.OrdinalIgnoreCase))
                 File.Copy(self, t.Uninstaller, true);
@@ -385,7 +388,8 @@ namespace KomorebiTraySetup
                 if (File.Exists(lnk)) File.Delete(lnk);
 
             report("Removing files…", 0.5);
-            foreach (string f in new[] { t.Exe, t.Exe + ".config", Path.Combine(t.TrayDir, "komorebi-tray.ico") })
+            foreach (string f in new[] { t.Exe, t.Exe + ".config", Path.Combine(t.TrayDir, "komorebi-tray.ico"),
+                                         Path.Combine(t.TrayDir, "headsetcontrol.exe"), Path.Combine(t.TrayDir, "THIRD_PARTY_NOTICES.txt") })
                 if (File.Exists(f)) File.Delete(f);
             Registry.CurrentUser.DeleteSubKeyTree(t.RegKey, false);
 

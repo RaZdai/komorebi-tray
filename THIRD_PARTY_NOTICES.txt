@@ -1,0 +1,17 @@
+komorebi-tray includes or is based on the following third-party software.
+
+Wireless Battery (Wireless-Device-Battery-Monitor)
+  Copyright (C) krisgfx9 and the Wireless Battery contributors
+  https://github.com/krisgfx9/Wireless-Device-Battery-Monitor
+  License: GNU General Public License v3.0 or later (see LICENSE)
+  The battery engine in src/battery/ and the battery readout in src/battery-ui.cs are a
+  C# port of its device drivers, taskbar widget, tray icons and menu.
+
+HeadsetControl 4.3.0 (headsetcontrol.exe)
+  Copyright (C) the HeadsetControl contributors
+  https://github.com/Sapd/HeadsetControl
+  License: GNU General Public License v3.0 (see LICENSE)
+  Corresponding source code:
+    https://github.com/Sapd/HeadsetControl/releases/tag/4.3.0
+  The binary is the unmodified official release asset headsetcontrol-windows-x86_64.exe,
+  SHA-256 e371da043710ddb8fc70af77f2ccad1cd03f8c6f49ba423e08764ad7a94a3c40.
