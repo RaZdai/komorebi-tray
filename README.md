@@ -39,9 +39,9 @@ komorebi does the tiling. komorebi-tray wraps it in a keyboard-first desktop exp
 
 <img src="docs/screenshots/keybinds-search.png" width="640" alt="Keybind editor filtered by 'focus'">
 
-**Alt+Shift+T: volume mixer.** The default output's level, mute and output switch, a rotary knob, and one slider per app.
+**Alt+Shift+T: volume mixer.** In the same style as the other menus: the default output's level, output switch and mute, a rotary knob, and one slider per app.
 
-<img src="docs/screenshots/volume-mixer.png" width="460" alt="Volume mixer">
+<img src="docs/screenshots/volume-mixer.png" width="422" alt="Volume mixer">
 
 **Alt+C: settings.** Every komorebi.json option the tray knows, in plain English, grouped into sections. Dependent settings dim when their switch is off, and the search box finds anything across sections.
 
@@ -107,7 +107,7 @@ Keybinds are stored in the standard whkd format at `%USERPROFILE%\.config\whkdrc
 
 - **Tray icon:** white while running, grey while stopped. Left-click stops or starts everything; right-click opens the menu (settings, keybinds, volume mixer, reload config, save diagnostics, quit).
 - **Menus** (Alt+K, Alt+C, Alt+Space) fade in and out; press their shortcut again, Esc, or click away to close them.
-- **Volume mixer** (Alt+Shift+T, or *Volume mixer* in the tray menu): opens at the top centre of the monitor your mouse is on (from the menu: under the tray icon). Drag the display, turn the knob (drag around it like a real knob, or scroll over it) to set the volume; the round buttons switch to your next output and mute it. Each app playing sound gets its own slider; click its icon to mute it. Arrow keys adjust, M mutes, Esc or a click away closes it. The level and the knob's light use komorebi's colour (your Windows accent while *Match Windows accent* is on). Alt+C → Volume mixer chooses whether quiet apps are listed. It talks to Windows' audio directly and does nothing while closed.
+- **Volume mixer** (Alt+Shift+T, or *Volume mixer* in the tray menu): opens at the top centre of the monitor your mouse is on (from the menu: under the tray icon). Drag the display, turn the knob (drag around it like a real knob, or scroll over it) to set the volume; the two buttons beside it switch to your next output and mute it. Each app playing sound gets its own slider; click its icon to mute it. Arrow keys adjust, M mutes, Esc or a click away closes it. It uses the same accent as the other menus (your Windows accent while *Match Windows accent* is on). Alt+C → Volume mixer chooses whether quiet apps are listed. It talks to Windows' audio directly and does nothing while closed.
 - **Keep videos solid** (Alt+C → Transparency, on by default) stops YouTube, Twitch and X from being dimmed when their browser window isn't focused, so a video you're watching on the side stays clear. It goes by the tab in front: a video tab behind another tab in the same window is dimmed like the rest. It covers all of X, not just its videos.
 - **Games and fullscreen video:** while a fullscreen window is in front (no title bar, covering its whole monitor), the tray pauses its shortcuts, so keys like Alt+Enter reach the game instead of opening a terminal. They come back the moment you leave it. Turn this off in Alt+C → Behaviour → *Pause shortcuts in fullscreen*. komorebi itself never tiles, dims or draws over fullscreen windows, and neither it nor the tray hooks your keyboard or mouse, so there's no added input delay.
 - **Match Windows accent** (Alt+C → Borders) gives the focused window's border, and the Alt+K, Alt+C and Alt+Space menus, your Windows accent colour, and follows it live when you change it in Settings → Personalization → Colors. Turning it off brings back the colour you had before. The choice is stored in `komorebi-tray.json` next to your config.

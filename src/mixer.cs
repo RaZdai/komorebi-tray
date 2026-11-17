@@ -414,7 +414,7 @@ namespace KomorebiTray
         public const string PrefInactive = "mixer_inactive_apps";
 
         // Layout in logical px (× S)
-        const int Pad = 26, PillW = 380, MainH = 104, AppH = 56, AppGap = 8, MainGap = 12;
+        const int Pad = 18;   // room around the panel for its shadow
 
         readonly float S;
         readonly NotifyIcon anchorIcon;
@@ -521,24 +521,11 @@ namespace KomorebiTray
             pollTimer.Start();
         }
 
-        // The colour komorebi uses: the Windows accent while "Match Windows accent" is on (the readable shade the
-        // menus use, so a very dark accent still shows), otherwise the focused border colour from komorebi.json.
+        // The menus' accent: the Windows accent while "Match Windows accent" is on (its readable shade for a
+        // very dark accent), komorebi-tray's own colour otherwise. Same as Alt+K, Alt+C and Alt+Space.
         static Color KomorebiColour(Dictionary<string, object> prefs)
         {
-            Color c;
-            if (AccentBorder.Follows(prefs) && AccentBorder.MenuColour(out c)) return c;
-            try
-            {
-                var cfg = Json.Parse(File.ReadAllText(Paths.Config));
-                string hex = Json.Get(cfg, "border_colours.single") as string;
-                if (hex != null && SettingsEditor.TryColor(hex, out c))
-                {
-                    // Lift a near-black border colour so the level stays visible on the dark display
-                    if (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B < 60) c = Mix(c, Color.White, 0.45);
-                    return c;
-                }
-            }
-            catch { }
+            Theme.Refresh(AccentBorder.Follows(prefs));
             return Theme.Accent;
         }
 
@@ -585,32 +572,44 @@ namespace KomorebiTray
 
         static float Round2(float v) { return (float)Math.Round(v * 100) / 100f; }
 
-        // ---- layout
+        // ---- layout (the tray's menu style: one dark panel, accent outline, header, divider, rows, key-hint footer)
 
-        RectangleF MainRect { get { return new RectangleF(P(Pad), P(Pad), P(PillW), P(MainH)); } }
+        const int PanelW = 420, HeaderH = 44, MainBlockH = 100, AppRowH = 40, FooterH = 34;
+
+        RectangleF Panel { get { return new RectangleF(P(Pad), P(Pad), P(PanelW), screenRect.Height - P(Pad) * 2); } }
+        float MainTop { get { return P(Pad) + P(HeaderH); } }
+        float AppsTop { get { return MainTop + P(MainBlockH) + P(6); } }
+        float FooterTop
+        {
+            get
+            {
+                int apps = main != null ? main.Apps.Count : 0;
+                return apps > 0 ? AppsTop + apps * P(AppRowH) + P(6) : MainTop + P(MainBlockH);
+            }
+        }
 
         void Build()
         {
             parts.Clear();
-            float x = P(Pad), y = P(Pad);
+            float x = P(Pad);
             if (main != null)
             {
-                parts.Add(new Part { Kind = PartKind.MainTrack, Device = main, Rect = new RectangleF(x + P(26), y + P(44), P(206), P(36)) });
-                parts.Add(new Part { Kind = PartKind.OutputButton, Device = main, Rect = Circle(x + P(262), y + P(32), P(17)) });
-                parts.Add(new Part { Kind = PartKind.MuteButton, Device = main, Rect = Circle(x + P(262), y + P(72), P(17)) });
-                parts.Add(new Part { Kind = PartKind.Knob, Device = main, Rect = Circle(x + P(PillW - 54), y + P(MainH / 2f), P(40)) });
-                float ay = y + P(MainH) + P(MainGap);
+                float cy = MainTop + P(MainBlockH) / 2;
+                parts.Add(new Part { Kind = PartKind.MainTrack, Device = main, Rect = new RectangleF(x + P(20), cy - P(18), P(230), P(36)) });
+                parts.Add(new Part { Kind = PartKind.OutputButton, Device = main, Rect = new RectangleF(x + P(266), cy - P(36), P(32), P(32)) });
+                parts.Add(new Part { Kind = PartKind.MuteButton, Device = main, Rect = new RectangleF(x + P(266), cy + P(4), P(32), P(32)) });
+                parts.Add(new Part { Kind = PartKind.Knob, Device = main, Rect = Circle(x + P(PanelW - 60), cy, P(40)) });
+                float ay = AppsTop;
                 foreach (var a in main.Apps)
                 {
-                    parts.Add(new Part { Kind = PartKind.AppButton, Device = main, App = a, Rect = Circle(x + P(30), ay + P(AppH / 2f), P(18)) });
-                    parts.Add(new Part { Kind = PartKind.AppTrack, Device = main, App = a, Rect = new RectangleF(x + P(58), ay + P(11), P(PillW - 58 - 12), P(34)) });
-                    ay += P(AppH) + P(AppGap);
+                    parts.Add(new Part { Kind = PartKind.AppButton, Device = main, App = a, Rect = new RectangleF(x + P(14), ay + P(4), P(32), P(AppRowH - 8)) });
+                    parts.Add(new Part { Kind = PartKind.AppTrack, Device = main, App = a, Rect = new RectangleF(x + P(186), ay + P(4), P(PanelW - 186 - 64), P(AppRowH - 8)) });
+                    ay += P(AppRowH);
                 }
             }
-            int apps = main != null ? main.Apps.Count : 0;
-            float h = P(Pad) + P(MainH) + (apps > 0 ? P(MainGap) + apps * P(AppH) + (apps - 1) * P(AppGap) : 0) + P(Pad);
-            screenRect.Width = Pi(PillW + Pad * 2);
-            screenRect.Height = (int)Math.Ceiling(h);
+            float bottom = (main == null ? MainTop + P(MainBlockH) : FooterTop) + P(FooterH);
+            screenRect.Width = Pi(PanelW + Pad * 2);
+            screenRect.Height = (int)Math.Ceiling(bottom + P(Pad));
         }
 
         static RectangleF Circle(float cx, float cy, float r) { return new RectangleF(cx - r, cy - r, r * 2, r * 2); }
@@ -744,6 +743,11 @@ namespace KomorebiTray
 
         // ---- rendering
 
+        static readonly Color Well = Color.FromArgb(18, 18, 20);
+        static readonly Color Track = Color.FromArgb(58, 58, 64);
+
+        Font MonoFont(float px, bool bold) { return new Font(Theme.Mono.FontFamily, px * S, bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel); }
+
         void Render()
         {
             if (IsDisposed || screenRect.Width <= 0) return;
@@ -758,8 +762,7 @@ namespace KomorebiTray
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                // Entrance: drop in from 8px above and grow from 97%
-                // (no transform at rest, so the final frame is pixel-exact)
+                // Entrance: drop in from 8px above and grow from 97% (no transform at rest, so the final frame is pixel-exact)
                 if (e < 0.999f)
                 {
                     float sc = 0.97f + 0.03f * e;
@@ -768,212 +771,227 @@ namespace KomorebiTray
                     g.TranslateTransform(-W / 2f, -P(Pad) - P(8) * (1 - e));
                 }
 
-                if (main == null) DrawEmpty(g);
+                var panel = Panel;
+                DrawPanel(g, panel);
+                DrawHeader(g, panel);
+                if (main == null)
+                {
+                    using (var f = MonoFont(12.5f, false))
+                    using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                    using (var br = new SolidBrush(Theme.Dim))
+                        Text(g, "No playback devices", f, br, new RectangleF(panel.X, MainTop, panel.Width, P(MainBlockH)), sf);
+                }
                 else
                 {
-                    DrawMain(g);
-                    float ay = P(Pad) + P(MainH) + P(MainGap);
-                    foreach (var a in main.Apps)
+                    foreach (var p in parts)
                     {
-                        DrawAppPill(g, new RectangleF(P(Pad), ay, P(PillW), P(AppH)), a);
-                        ay += P(AppH) + P(AppGap);
+                        if (p.App != null) continue;
+                        if (p.Kind == PartKind.MainTrack) Display(g, p);
+                        else if (p.Kind == PartKind.OutputButton) SquareButton(g, p, "", devices.Count > 1, false);
+                        else if (p.Kind == PartKind.MuteButton) SquareButton(g, p, main.Muted ? "" : "", true, main.Muted);
+                        else if (p.Kind == PartKind.Knob) Knob(g, p);
+                    }
+                    if (main.Apps.Count > 0)
+                    {
+                        Divider(g, panel, AppsTop - P(6));
+                        float ay = AppsTop;
+                        foreach (var a in main.Apps) { DrawAppRow(g, new RectangleF(panel.X + P(8), ay, panel.Width - P(16), P(AppRowH)), a); ay += P(AppRowH); }
                     }
                 }
+                DrawFooter(g, panel);
             }
             Push((byte)Math.Round(255 * e));
         }
 
-        // Charcoal body: soft drop shadow, vertical gradient, hairline highlight on top, dark outline
-        void Body(Graphics g, RectangleF r)
+        // The menus' window: dark panel, thin accent outline, soft shadow
+        void DrawPanel(Graphics g, RectangleF r)
         {
-            float rad = r.Height / 2;
-            for (int i = 8; i >= 1; i--)
+            float rad = P(8);
+            for (int i = 6; i >= 1; i--)
             {
-                var sh = RectangleF.Inflate(r, P(i * 1.6f), P(i * 1.6f));
-                sh.Offset(0, P(7));
-                using (var path = Rounded(sh, rad + P(i * 1.6f)))
-                using (var br = new SolidBrush(Color.FromArgb(9, 0, 0, 0)))
+                var sh = RectangleF.Inflate(r, P(i * 1.5f), P(i * 1.5f));
+                sh.Offset(0, P(4));
+                using (var path = Rounded(sh, rad + P(i * 1.5f)))
+                using (var br = new SolidBrush(Color.FromArgb(10, 0, 0, 0)))
                     g.FillPath(br, path);
             }
             using (var path = Rounded(r, rad))
             {
-                using (var lg = new LinearGradientBrush(r, Color.FromArgb(44, 44, 47), Color.FromArgb(27, 27, 29), 90f))
-                    g.FillPath(lg, path);
-                using (var pen = new Pen(Color.FromArgb(160, 0, 0, 0), P(1))) g.DrawPath(pen, path);
-            }
-            // Top-edge light catch
-            var hl = RectangleF.Inflate(r, -P(1), -P(1));
-            using (var path = Rounded(hl, hl.Height / 2))
-            using (var lg = new LinearGradientBrush(hl, Color.FromArgb(34, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
-            {
-                lg.SetBlendTriangularShape(0f, 1f);
-                var blend = new Blend { Factors = new[] { 1f, 0.15f, 0f, 0f }, Positions = new[] { 0f, 0.12f, 0.5f, 1f } };
-                lg.Blend = blend;
-                using (var pen = new Pen(lg, P(1))) g.DrawPath(pen, path);
+                using (var br = new SolidBrush(Theme.Bg)) g.FillPath(br, path);
+                using (var pen = new Pen(Theme.Accent, P(1))) g.DrawPath(pen, path);
             }
         }
 
-        void DrawEmpty(Graphics g)
+        void Divider(Graphics g, RectangleF panel, float y)
         {
-            var r = MainRect;
-            Body(g, r);
-            using (var f = new Font("Segoe UI", 13 * S, FontStyle.Regular, GraphicsUnit.Pixel))
-            using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-            using (var br = new SolidBrush(Color.FromArgb(200, 230, 230, 235)))
-                Text(g, "No playback devices", f, br, r, sf);
+            using (var pen = new Pen(Theme.Border, P(1)))
+                g.DrawLine(pen, panel.X + P(12), y, panel.Right - P(12), y);
         }
 
-        void DrawMain(Graphics g)
+        // "Volume" in the dim header style of the other menus, the output's name on the right
+        void DrawHeader(Graphics g, RectangleF panel)
         {
-            var r = MainRect;
-            Body(g, r);
-
-            // Label: "Volume" and the output's name
-            using (var f = new Font("Segoe UI", 13 * S, FontStyle.Regular, GraphicsUnit.Pixel))
-            using (var fd = new Font("Segoe UI", 12 * S, FontStyle.Regular, GraphicsUnit.Pixel))
-            using (var sf = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            using (var br = new SolidBrush(Color.FromArgb(232, 232, 236)))
-            using (var dim = new SolidBrush(Color.FromArgb(120, 120, 128)))
+            var hr = new RectangleF(panel.X + P(20), panel.Y, panel.Width - P(40), P(HeaderH));
+            using (var f = MonoFont(14, true))
+            using (var fd = MonoFont(12, false))
+            using (var sf = new StringFormat { LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
+            using (var sfr = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+            using (var dim = new SolidBrush(Theme.Dim))
+            using (var text = new SolidBrush(Theme.TextSoft))
             {
-                var lr = new RectangleF(r.X + P(30), r.Y + P(14), P(204), P(22));
-                float vw = g.MeasureString("Volume", f, (int)lr.Width, sf).Width;
-                Text(g, "Volume", f, br, lr, sf);
-                Text(g, main.Name, fd, dim, new RectangleF(lr.X + vw + P(4), lr.Y + P(0.5f), lr.Width - vw - P(4), lr.Height), sf);
+                float tw = g.MeasureString("Volume", f).Width;
+                Text(g, "Volume", f, dim, hr, sf);
+                if (main != null)
+                    Text(g, main.Name, fd, text, new RectangleF(hr.X + tw + P(16), hr.Y, hr.Width - tw - P(16), hr.Height), sfr);
             }
-
-            foreach (var p in parts)
-            {
-                if (p.App != null) continue;
-                if (p.Kind == PartKind.MainTrack) Display(g, p, null);
-                else if (p.Kind == PartKind.OutputButton) RoundButton(g, p, "\uE7F5", devices.Count > 1, false);
-                else if (p.Kind == PartKind.MuteButton) RoundButton(g, p, main.Muted ? "\uE74F" : "\uE767", true, main.Muted);
-                else if (p.Kind == PartKind.Knob) Knob(g, p);
-            }
+            Divider(g, panel, panel.Y + P(HeaderH));
         }
 
-        void DrawAppPill(Graphics g, RectangleF r, MixerApp a)
+        void DrawFooter(Graphics g, RectangleF panel)
         {
-            Body(g, r);
-            foreach (var p in parts)
-            {
-                if (p.App != a) continue;
-                if (p.Kind == PartKind.AppButton) AppButton(g, p);
-                else if (p.Kind == PartKind.AppTrack) Display(g, p, a.Name);
-            }
+            float top = main == null ? MainTop + P(MainBlockH) : FooterTop;
+            Divider(g, panel, top);
+            using (var f = MonoFont(11, false))
+            using (var sf = new StringFormat { LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
+            using (var br = new SolidBrush(Theme.Dim))
+                Text(g, "↑↓ volume   ↻ turn knob   m mute   esc close", f, br, new RectangleF(panel.X + P(20), top, panel.Width - P(40), P(FooterH)), sf);
         }
 
-        // Recessed display: dark well, gradient level pill with a top gloss, % on the right
-        void Display(Graphics g, Part p, string name)
+        // Recessed level display: dark well with a grey outline, flat accent level, % on the right
+        void Display(Graphics g, Part p)
         {
             var r = p.Rect;
-            float rad = r.Height / 2;
-            using (var path = Rounded(r, rad))
+            using (var path = Rounded(r, P(4)))
             {
-                using (var br = new SolidBrush(Color.FromArgb(17, 17, 19))) g.FillPath(br, path);
-                // Inner shadow along the top, faint light along the bottom lip
-                using (var lg = new LinearGradientBrush(r, Color.FromArgb(150, 0, 0, 0), Color.FromArgb(0, 0, 0, 0), 90f))
+                using (var br = new SolidBrush(Well)) g.FillPath(br, path);
+                using (var lg = new LinearGradientBrush(r, Color.FromArgb(110, 0, 0, 0), Color.FromArgb(0, 0, 0, 0), 90f))
                 {
-                    lg.Blend = new Blend { Factors = new[] { 1f, 0f, 0f }, Positions = new[] { 0f, 0.35f, 1f } };
+                    lg.Blend = new Blend { Factors = new[] { 1f, 0f, 0f }, Positions = new[] { 0f, 0.3f, 1f } };
                     g.FillPath(lg, path);
                 }
-                using (var lg = new LinearGradientBrush(RectangleF.Inflate(r, 0, P(1)), Color.FromArgb(0, 255, 255, 255), Color.FromArgb(22, 255, 255, 255), 90f))
-                {
-                    lg.Blend = new Blend { Factors = new[] { 0f, 0f, 1f }, Positions = new[] { 0f, 0.8f, 1f } };
-                    using (var pen = new Pen(lg, P(1))) g.DrawPath(pen, path);
-                }
+                using (var pen = new Pen(p.HoverT > 0.01f || p.PressT > 0.01f ? Blend(Theme.Border, Theme.Accent, Math.Max(p.HoverT * 0.6f, p.PressT)) : Theme.Border, P(1)))
+                    g.DrawPath(pen, path);
             }
 
-            float inset = P(3);
-            var inner = RectangleF.Inflate(r, -inset, -inset);
+            var inner = RectangleF.Inflate(r, -P(4), -P(4));
             float v = Math.Max(0, Math.Min(1, p.Shown));
             bool muted = p.Muted;
+            Color fill = muted ? Color.FromArgb(78, 78, 84) : fillB;
             if (v > 0.001f)
             {
-                float w = Math.Max(inner.Height, inner.Width * v);
-                var fr = new RectangleF(inner.X, inner.Y, w, inner.Height);
-                using (var path = Rounded(fr, fr.Height / 2))
+                var fr = new RectangleF(inner.X, inner.Y, Math.Max(P(3), inner.Width * v), inner.Height);
+                using (var path = Rounded(fr, P(2)))
                 {
-                    Color a = muted ? Color.FromArgb(92, 92, 98) : fillA, b = muted ? Color.FromArgb(70, 70, 76) : fillB;
-                    // Gradient spans the whole well so the colour shifts as the level grows
-                    using (var lg = new LinearGradientBrush(new RectangleF(inner.X - 1, inner.Y, inner.Width + 2, inner.Height), a, b, 0f))
-                        g.FillPath(lg, path);
-                    using (var lg = new LinearGradientBrush(fr, Color.FromArgb(muted ? 30 : 70, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
+                    using (var br = new SolidBrush(fill)) g.FillPath(br, path);
+                    using (var lg = new LinearGradientBrush(fr, Color.FromArgb(muted ? 20 : 46, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f))
                     {
-                        lg.Blend = new Blend { Factors = new[] { 1f, 0f, 0f }, Positions = new[] { 0f, 0.55f, 1f } };
+                        lg.Blend = new Blend { Factors = new[] { 1f, 0f, 0f }, Positions = new[] { 0f, 0.5f, 1f } };
                         g.FillPath(lg, path);
                     }
-                    // Soft glow while touched
-                    if (p.HoverT > 0.01f || p.PressT > 0.01f)
-                        using (var pen = new Pen(Color.FromArgb((int)(60 * Math.Max(p.HoverT * 0.6f, p.PressT)), 255, 255, 255), P(1)))
-                            g.DrawPath(pen, path);
                 }
             }
 
-            using (var f = new Font("Segoe UI", 13 * S, FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var f = MonoFont(13, true))
             using (var sf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
             {
-                // Dark figures once the level reaches under them (light figures on the dark well otherwise),
-                // picked against how bright the fill colour actually is there
-                bool overFill = inner.X + inner.Width * v > inner.Right - P(46);
-                Color under = muted ? Color.FromArgb(80, 80, 86) : fillB;
-                bool darkText = overFill && (0.2126 * under.R + 0.7152 * under.G + 0.0722 * under.B) > 90;
-                Color tc = darkText ? Color.FromArgb(muted ? 150 : 225, 18, 18, 20) : Color.FromArgb(muted ? 120 : 228, 236, 236, 240);
+                bool overFill = inner.X + inner.Width * v > inner.Right - P(52);
+                bool darkText = overFill && Luma(fill) > 90;
+                Color tc = darkText ? Color.FromArgb(muted ? 150 : 230, 18, 18, 20) : Color.FromArgb(muted ? 120 : 236, Theme.Text);
                 using (var br = new SolidBrush(tc))
-                    Text(g, Math.Round(p.Value * 100) + "%", f, br, new RectangleF(inner.X, inner.Y, inner.Width - P(10), inner.Height), sf);
+                    Text(g, Math.Round(p.Value * 100) + "%", f, br, new RectangleF(inner.X, inner.Y, inner.Width - P(8), inner.Height), sf);
             }
-
-            if (name != null)
-                using (var f = new Font("Segoe UI Semibold", 12 * S, FontStyle.Regular, GraphicsUnit.Pixel))
-                using (var sf = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-                using (var shadow = new SolidBrush(Color.FromArgb(muted ? 0 : 70, 0, 0, 0)))
-                using (var br = new SolidBrush(Color.FromArgb(muted ? 130 : 245, 255, 255, 255)))
-                {
-                    var tr = new RectangleF(inner.X + P(12), inner.Y, inner.Width - P(64), inner.Height);
-                    var trs = tr; trs.Offset(0, P(1));
-                    Text(g, name, f, shadow, trs, sf);
-                    Text(g, name, f, br, tr, sf);
-                }
         }
 
-        // Small round mode button: dark dish, rim light, glyph
-        void RoundButton(Graphics g, Part p, string glyph, bool enabled, bool active)
+        static double Luma(Color c) { return 0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B; }
+
+        static Color Blend(Color a, Color b, float t)
+        {
+            t = Math.Max(0, Math.Min(1, t));
+            return Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
+        }
+
+        // Square button like the settings screen's choice buttons: grey outline, filled with the accent when active
+        void SquareButton(Graphics g, Part p, string glyph, bool enabled, bool active)
         {
             var r = p.Rect;
             if (p.PressT > 0.01f) r = RectangleF.Inflate(r, -P(1) * p.PressT, -P(1) * p.PressT);
-            using (var lg = new LinearGradientBrush(r, Color.FromArgb(active ? 16 : 22, active ? 16 : 22, active ? 18 : 24), Color.FromArgb(active ? 26 : 36, active ? 26 : 36, active ? 28 : 39), 90f))
-                g.FillEllipse(lg, r);
-            using (var lg = new LinearGradientBrush(RectangleF.Inflate(r, 1, 1), Color.FromArgb(10, 255, 255, 255), Color.FromArgb(40, 255, 255, 255), 90f))
-            using (var pen = new Pen(lg, P(1))) g.DrawEllipse(pen, r);
-            if (p.HoverT > 0.01f && enabled)
-                using (var br = new SolidBrush(Color.FromArgb((int)(16 * p.HoverT), 255, 255, 255))) g.FillEllipse(br, r);
-            int a = !enabled ? 70 : active ? 250 : (int)(185 + 60 * p.HoverT);
+            Color bg = active ? Theme.Accent : (p.HoverT > 0.01f && enabled ? Blend(Theme.Surface, Theme.Hover, p.HoverT) : Theme.Surface);
+            Color border = active ? Theme.Accent : Theme.Border;
+            using (var path = Rounded(r, P(4)))
+            {
+                using (var br = new SolidBrush(bg)) g.FillPath(br, path);
+                using (var pen = new Pen(border, P(1))) g.DrawPath(pen, path);
+            }
+            Color fg = !enabled ? Color.FromArgb(80, Theme.Text) : active ? (Luma(Theme.Accent) > 150 ? Color.FromArgb(20, 20, 22) : Color.White) : Theme.Text;
             using (var f = new Font("Segoe MDL2 Assets", 14 * S, FontStyle.Regular, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-            using (var br = new SolidBrush(Color.FromArgb(a, 236, 236, 240)))
+            using (var br = new SolidBrush(fg))
                 Text(g, glyph, f, br, new RectangleF(r.X, r.Y + P(0.5f), r.Width, r.Height), sf);
         }
 
-        void AppButton(Graphics g, Part p)
+        // An app: a list row like the other menus (selection block with an accent bar on hover), icon, name,
+        // the settings screen's thin slider, and its %
+        void DrawAppRow(Graphics g, RectangleF row, MixerApp a)
         {
-            RoundButton(g, p, "", true, p.App.Muted);
-            var r = p.Rect;
+            Part icon = null, track = null;
+            foreach (var p in parts) if (p.App == a) { if (p.Kind == PartKind.AppButton) icon = p; else if (p.Kind == PartKind.AppTrack) track = p; }
+            if (icon == null || track == null) return;
+            float hov = Math.Max(Math.Max(icon.HoverT, track.HoverT), track.PressT);
+            if (hov > 0.01f)
+            {
+                using (var path = Rounded(row, P(4)))
+                using (var br = new SolidBrush(Color.FromArgb((int)(255 * hov), Theme.Selection)))
+                    g.FillPath(br, path);
+                using (var br = new SolidBrush(Color.FromArgb((int)(255 * hov), Theme.Accent)))
+                    g.FillRectangle(br, row.X, row.Y + P(7), P(3), row.Height - P(14));
+            }
+
+            bool muted = a.Muted;
+            float cy = row.Y + row.Height / 2;
+            // Icon (click to mute)
             float sz = P(18);
-            var dest = new RectangleF(r.X + (r.Width - sz) / 2, r.Y + (r.Height - sz) / 2, sz, sz);
-            float alpha = p.App.Muted ? 0.35f : 1f;
-            if (p.App.Icon != null)
+            var dest = new RectangleF(icon.Rect.X + (icon.Rect.Width - sz) / 2, cy - sz / 2, sz, sz);
+            float alpha = muted ? 0.35f : 1f;
+            if (a.Icon != null)
                 using (var ia = new ImageAttributes())
                 {
                     ia.SetColorMatrix(new ColorMatrix { Matrix33 = alpha });
-                    g.DrawImage(p.App.Icon, Rectangle.Round(dest), 0, 0, p.App.Icon.Width, p.App.Icon.Height, GraphicsUnit.Pixel, ia);
+                    g.DrawImage(a.Icon, Rectangle.Round(dest), 0, 0, a.Icon.Width, a.Icon.Height, GraphicsUnit.Pixel, ia);
                 }
             else
-                using (var f = new Font("Segoe UI Semibold", 12 * S, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var f = MonoFont(12, true))
                 using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                using (var br = new SolidBrush(Color.FromArgb((int)(230 * alpha), 236, 236, 240)))
-                    Text(g, p.App.Name.Substring(0, 1).ToUpperInvariant(), f, br, dest, sf);
-            if (p.App.Muted)
-                using (var pen = new Pen(Color.FromArgb(220, 236, 236, 240), P(1.6f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                using (var br = new SolidBrush(Color.FromArgb((int)(230 * alpha), Theme.Text)))
+                    Text(g, a.Name.Substring(0, 1).ToUpperInvariant(), f, br, dest, sf);
+            if (muted)
+                using (var pen = new Pen(Color.FromArgb(220, Theme.Text), P(1.6f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawLine(pen, dest.Left + P(1), dest.Bottom - P(1), dest.Right - P(1), dest.Top + P(1));
+
+            // Name
+            using (var f = MonoFont(12.5f, true))
+            using (var sf = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+            using (var br = new SolidBrush(muted ? Theme.Dim : Theme.Text))
+                Text(g, a.Name, f, br, new RectangleF(row.X + P(46), row.Y, P(128), row.Height), sf);
+
+            // Slider (thin track, accent fill, white round thumb)
+            var tr = track.Rect;
+            float x0 = tr.X + P(8), x1 = tr.Right - P(8), th = P(4);
+            float v = Math.Max(0, Math.Min(1, track.Shown));
+            float tx = x0 + v * (x1 - x0);
+            using (var path = Rounded(new RectangleF(x0, cy - th / 2, x1 - x0, th), th / 2))
+            using (var br = new SolidBrush(Track)) g.FillPath(br, path);
+            if (tx > x0 + P(1))
+                using (var path = Rounded(new RectangleF(x0, cy - th / 2, tx - x0, th), th / 2))
+                using (var br = new SolidBrush(muted ? Color.FromArgb(96, 96, 104) : fillB)) g.FillPath(br, path);
+            float tr2 = P(7) + P(1.5f) * Math.Max(track.HoverT, track.PressT);
+            using (var br = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillEllipse(br, tx - tr2, cy - tr2 + P(1), tr2 * 2, tr2 * 2);
+            using (var br = new SolidBrush(muted ? Color.FromArgb(170, 170, 176) : Color.White)) g.FillEllipse(br, tx - tr2, cy - tr2, tr2 * 2, tr2 * 2);
+
+            // %
+            using (var f = MonoFont(12.5f, true))
+            using (var sf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
+            using (var br = new SolidBrush(muted ? Theme.Dim : Theme.Text))
+                Text(g, Math.Round(a.Volume * 100) + "%", f, br, new RectangleF(tr.Right, row.Y, row.Right - tr.Right - P(12), row.Height), sf);
         }
 
         // Knurled rotary knob: ridged outer ring that turns with the level, domed cap, dark centre well
@@ -1108,12 +1126,12 @@ namespace KomorebiTray
         {
             foreach (var p in parts)
             {
-                if (p.Kind == PartKind.Knob || p.Kind == PartKind.OutputButton || p.Kind == PartKind.MuteButton || p.Kind == PartKind.AppButton)
+                if (p.Kind == PartKind.Knob)
                 {
                     float cx = p.Rect.X + p.Rect.Width / 2, cy = p.Rect.Y + p.Rect.Height / 2, rr = p.Rect.Width / 2 + P(2);
                     if ((pt.X - cx) * (pt.X - cx) + (pt.Y - cy) * (pt.Y - cy) <= rr * rr) return p;
                 }
-                else if (RectangleF.Inflate(p.Rect, 0, P(4)).Contains(pt)) return p;
+                else if (RectangleF.Inflate(p.Rect, P(1), P(2)).Contains(pt)) return p;
             }
             return null;
         }
@@ -1122,7 +1140,7 @@ namespace KomorebiTray
 
         float TrackValue(Part p, int x)
         {
-            float inset = P(3);
+            float inset = p.Kind == PartKind.AppTrack ? P(8) : P(4);
             return Math.Max(0, Math.Min(1, (x - p.Rect.X - inset) / (p.Rect.Width - inset * 2)));
         }
 
@@ -1194,7 +1212,7 @@ namespace KomorebiTray
             if (p == null)
             {
                 // Over empty space on the main pill: the main volume
-                if (main == null || !MainRect.Contains(e.Location)) return;
+                if (main == null || !Panel.Contains(e.Location)) return;
                 p = parts.Find(x => x.Kind == PartKind.Knob);
             }
             if (p.Kind == PartKind.OutputButton) return;

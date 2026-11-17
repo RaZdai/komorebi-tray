@@ -2973,14 +2973,28 @@ namespace KomorebiTray
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextLength(IntPtr h);
 
         const int WS_THICKFRAME = 0x40000, WS_EX_TRANSPARENT = 0x20, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
-        static readonly HashSet<IntPtr> handed = new HashSet<IntPtr>();
+        // Which komorebi (by process id) each Claude window was handed to: a restarted komorebi starts empty
+        static readonly Dictionary<IntPtr, int> handed = new Dictionary<IntPtr, int>();
+
+        public static IntPtr Foreground() { return GetForegroundWindow(); }
+
+        static int KomorebiPid()
+        {
+            var ps = Process.GetProcessesByName("komorebi");
+            int pid = ps.Length > 0 ? ps[0].Id : 0;
+            foreach (var p in ps) p.Dispose();
+            return pid;
+        }
         static System.Windows.Forms.Timer settle;
 
         public static void OnForeground(IntPtr hwnd)
         {
             try
             {
-                if (hwnd == IntPtr.Zero || handed.Contains(hwnd) || !IsMainClaudeWindow(hwnd)) return;
+                if (hwnd == IntPtr.Zero || !IsMainClaudeWindow(hwnd)) return;
+                int kpid = KomorebiPid();
+                int to;
+                if (kpid == 0 || (handed.TryGetValue(hwnd, out to) && to == kpid)) return;   // komorebi not running, or already has it
                 // Let the focus change settle, then manage it only if it is still the window in front
                 if (settle != null) settle.Dispose();
                 settle = new System.Windows.Forms.Timer { Interval = 200 };
@@ -2988,8 +3002,10 @@ namespace KomorebiTray
                 {
                     settle.Stop();
                     if (GetForegroundWindow() != hwnd || !IsMainClaudeWindow(hwnd)) return;
-                    handed.RemoveWhere(h => !IsWindow(h));
-                    handed.Add(hwnd);
+                    int now = KomorebiPid();
+                    if (now == 0) return;
+                    foreach (var dead in new List<IntPtr>(handed.Keys)) if (!IsWindow(dead)) handed.Remove(dead);
+                    handed[hwnd] = now;
                     Run.K("manage");
                     Log.Write("Claude window handed to komorebi");
                 };
@@ -3275,7 +3291,11 @@ namespace KomorebiTray
         // Get told when komorebi exits. Only SYNCHRONIZE is requested, which Windows also grants on an admin
         // komorebi (Process.EnableRaisingEvents asks for more and is refused there). The wait is a kernel
         // wait on the thread pool, so nothing runs while komorebi is fine; a 5 s check is the fallback.
-        void Watch()
+        void Watch() { Watch(0); }
+
+        // Waits for komorebi to appear after a start. Right after sign-in it can take a while, and a start can
+        // also simply fail; either way the tray must not carry on as if it were running, so it starts it again.
+        void Watch(int attempt)
         {
             int tries = 0;
             var t = new System.Windows.Forms.Timer { Interval = 300 };
@@ -3284,9 +3304,28 @@ namespace KomorebiTray
                 Process[] ps = Process.GetProcessesByName("komorebi");
                 int pid = ps.Length > 0 ? ps[0].Id : 0;
                 foreach (var p in ps) p.Dispose();
-                if (pid == 0 && ++tries <= 30) return;
+                if (pid == 0 && ++tries <= 50) return;   // up to 15 s
                 t.Stop(); t.Dispose();
-                if (pid != 0) Attach(pid);
+                if (pid != 0)
+                {
+                    Attach(pid);
+                    // A Claude window already in front is handed over now, not on its next activation
+                    ClaudeTiling.OnForeground(ClaudeTiling.Foreground());
+                    return;
+                }
+                if (stopped || quitting) return;
+                if (attempt < 2)
+                {
+                    Log.Write("komorebi didn't start; starting it again");
+                    WindowFixer.ClearKomorebiTransparency();
+                    if (!Run.StartElevatedKomorebi()) Run.K("start --clean-state");
+                    Watch(attempt + 1);
+                }
+                else
+                {
+                    Log.Write("komorebi didn't start after 3 tries");
+                    tray.ShowBalloonTip(4000, "komorebi", "komorebi didn't start. Click the tray icon twice to try again.", ToolTipIcon.Warning);
+                }
             };
             t.Start();
         }
