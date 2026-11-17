@@ -411,8 +411,7 @@ namespace KomorebiTray
         [StructLayout(LayoutKind.Sequential)] struct NOTIFYICONIDENTIFIER { public int cbSize; public IntPtr hWnd; public int uID; public Guid guidItem; }
 
         // Preferences (komorebi-tray.json, edited in Alt+C → Volume mixer)
-        public const string PrefInactive = "mixer_inactive_apps", PrefColour = "mixer_colour";
-        public static readonly string[] Colours = { "Ice", "Amber", "Accent" };
+        public const string PrefInactive = "mixer_inactive_apps";
 
         // Layout in logical px (× S)
         const int Pad = 26, PillW = 380, MainH = 104, AppH = 56, AppGap = 8, MainGap = 12;
@@ -436,8 +435,8 @@ namespace KomorebiTray
         bool closing;
         DateTime shownAt;
         Part hover, drag;
-        Point dragStart;
-        float dragStartValue;
+        double dragAngle;
+        float knobValue;
         int polls;
 
         enum PartKind { MainTrack, Knob, OutputButton, MuteButton, AppButton, AppTrack }
@@ -501,10 +500,9 @@ namespace KomorebiTray
             var prefs = AccentBorder.LoadPrefs();
             object v;
             inactiveApps = !prefs.TryGetValue(PrefInactive, out v) || Convert.ToBoolean(v);
-            string colour = prefs.TryGetValue(PrefColour, out v) ? Convert.ToString(v) : "Ice";
-            if (colour == "Amber") { fillA = Color.FromArgb(255, 226, 150); fillB = Color.FromArgb(247, 140, 58); }
-            else if (colour == "Accent") { Theme.Refresh(); fillA = Mix(Theme.Accent, Color.White, 0.45); fillB = Theme.Accent; }
-            else { fillA = Color.FromArgb(92, 230, 206); fillB = Color.FromArgb(110, 182, 255); }
+            Color c = KomorebiColour(prefs);
+            fillA = Mix(c, Color.White, 0.38);
+            fillB = c;
 
             devices = AudioModel.Load(inactiveApps, Pi(18));
             main = devices.Count > 0 ? devices[0] : null;
@@ -521,6 +519,27 @@ namespace KomorebiTray
             lastFrame = clock.Elapsed.TotalMilliseconds;
             tick.Start();
             pollTimer.Start();
+        }
+
+        // The colour komorebi uses: the Windows accent while "Match Windows accent" is on (the readable shade the
+        // menus use, so a very dark accent still shows), otherwise the focused border colour from komorebi.json.
+        static Color KomorebiColour(Dictionary<string, object> prefs)
+        {
+            Color c;
+            if (AccentBorder.Follows(prefs) && AccentBorder.MenuColour(out c)) return c;
+            try
+            {
+                var cfg = Json.Parse(File.ReadAllText(Paths.Config));
+                string hex = Json.Get(cfg, "border_colours.single") as string;
+                if (hex != null && SettingsEditor.TryColor(hex, out c))
+                {
+                    // Lift a near-black border colour so the level stays visible on the dark display
+                    if (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B < 60) c = Mix(c, Color.White, 0.45);
+                    return c;
+                }
+            }
+            catch { }
+            return Theme.Accent;
         }
 
         static Color Mix(Color a, Color b, double t)
@@ -737,13 +756,17 @@ namespace KomorebiTray
                 g.Clear(Color.Transparent);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 // Entrance: drop in from 8px above and grow from 97%
-                float sc = 0.97f + 0.03f * e;
-                g.TranslateTransform(W / 2f, P(Pad));
-                g.ScaleTransform(sc, sc);
-                g.TranslateTransform(-W / 2f, -P(Pad) - P(8) * (1 - e));
+                // (no transform at rest, so the final frame is pixel-exact)
+                if (e < 0.999f)
+                {
+                    float sc = 0.97f + 0.03f * e;
+                    g.TranslateTransform(W / 2f, P(Pad));
+                    g.ScaleTransform(sc, sc);
+                    g.TranslateTransform(-W / 2f, -P(Pad) - P(8) * (1 - e));
+                }
 
                 if (main == null) DrawEmpty(g);
                 else
@@ -797,7 +820,7 @@ namespace KomorebiTray
             using (var f = new Font("Segoe UI", 13 * S, FontStyle.Regular, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
             using (var br = new SolidBrush(Color.FromArgb(200, 230, 230, 235)))
-                g.DrawString("No playback devices", f, br, r, sf);
+                Text(g, "No playback devices", f, br, r, sf);
         }
 
         void DrawMain(Graphics g)
@@ -814,8 +837,8 @@ namespace KomorebiTray
             {
                 var lr = new RectangleF(r.X + P(30), r.Y + P(14), P(204), P(22));
                 float vw = g.MeasureString("Volume", f, (int)lr.Width, sf).Width;
-                g.DrawString("Volume", f, br, lr, sf);
-                g.DrawString(main.Name, fd, dim, new RectangleF(lr.X + vw + P(4), lr.Y + P(0.5f), lr.Width - vw - P(4), lr.Height), sf);
+                Text(g, "Volume", f, br, lr, sf);
+                Text(g, main.Name, fd, dim, new RectangleF(lr.X + vw + P(4), lr.Y + P(0.5f), lr.Width - vw - P(4), lr.Height), sf);
             }
 
             foreach (var p in parts)
@@ -888,8 +911,16 @@ namespace KomorebiTray
 
             using (var f = new Font("Segoe UI", 13 * S, FontStyle.Regular, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
-            using (var br = new SolidBrush(Color.FromArgb(muted ? 120 : 228, 236, 236, 240)))
-                g.DrawString(Math.Round(p.Value * 100) + "%", f, br, new RectangleF(inner.X, inner.Y, inner.Width - P(10), inner.Height), sf);
+            {
+                // Dark figures once the level reaches under them (light figures on the dark well otherwise),
+                // picked against how bright the fill colour actually is there
+                bool overFill = inner.X + inner.Width * v > inner.Right - P(46);
+                Color under = muted ? Color.FromArgb(80, 80, 86) : fillB;
+                bool darkText = overFill && (0.2126 * under.R + 0.7152 * under.G + 0.0722 * under.B) > 90;
+                Color tc = darkText ? Color.FromArgb(muted ? 150 : 225, 18, 18, 20) : Color.FromArgb(muted ? 120 : 228, 236, 236, 240);
+                using (var br = new SolidBrush(tc))
+                    Text(g, Math.Round(p.Value * 100) + "%", f, br, new RectangleF(inner.X, inner.Y, inner.Width - P(10), inner.Height), sf);
+            }
 
             if (name != null)
                 using (var f = new Font("Segoe UI Semibold", 12 * S, FontStyle.Regular, GraphicsUnit.Pixel))
@@ -899,8 +930,8 @@ namespace KomorebiTray
                 {
                     var tr = new RectangleF(inner.X + P(12), inner.Y, inner.Width - P(64), inner.Height);
                     var trs = tr; trs.Offset(0, P(1));
-                    g.DrawString(name, f, shadow, trs, sf);
-                    g.DrawString(name, f, br, tr, sf);
+                    Text(g, name, f, shadow, trs, sf);
+                    Text(g, name, f, br, tr, sf);
                 }
         }
 
@@ -919,7 +950,7 @@ namespace KomorebiTray
             using (var f = new Font("Segoe MDL2 Assets", 14 * S, FontStyle.Regular, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
             using (var br = new SolidBrush(Color.FromArgb(a, 236, 236, 240)))
-                g.DrawString(glyph, f, br, new RectangleF(r.X, r.Y + P(0.5f), r.Width, r.Height), sf);
+                Text(g, glyph, f, br, new RectangleF(r.X, r.Y + P(0.5f), r.Width, r.Height), sf);
         }
 
         void AppButton(Graphics g, Part p)
@@ -939,7 +970,7 @@ namespace KomorebiTray
                 using (var f = new Font("Segoe UI Semibold", 12 * S, FontStyle.Regular, GraphicsUnit.Pixel))
                 using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                 using (var br = new SolidBrush(Color.FromArgb((int)(230 * alpha), 236, 236, 240)))
-                    g.DrawString(p.App.Name.Substring(0, 1).ToUpperInvariant(), f, br, dest, sf);
+                    Text(g, p.App.Name.Substring(0, 1).ToUpperInvariant(), f, br, dest, sf);
             if (p.App.Muted)
                 using (var pen = new Pen(Color.FromArgb(220, 236, 236, 240), P(1.6f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawLine(pen, dest.Left + P(1), dest.Bottom - P(1), dest.Right - P(1), dest.Top + P(1));
@@ -1000,13 +1031,19 @@ namespace KomorebiTray
             using (var lg = new LinearGradientBrush(RectangleF.Inflate(well, 1, 1), Color.FromArgb(140, 0, 0, 0), Color.FromArgb(40, 255, 255, 255), 90f))
             using (var pen = new Pen(lg, P(1))) g.DrawEllipse(pen, well);
 
-            // Level marker on the cap, in the fill colour
+            // Level light on the cap, in komorebi's colour (grey while muted), with a soft glow
             float mr = rc - P(6);
-            float mx = cx + (float)Math.Cos(angle - Math.PI / 2 + Math.PI / 2) * 0, my = 0;
-            mx = cx + (float)Math.Sin(angle) * mr;
-            my = cy - (float)Math.Cos(angle) * mr;
-            using (var br = new SolidBrush(main.Muted ? Color.FromArgb(110, 110, 116) : fillB))
-                g.FillEllipse(br, mx - P(2.2f), my - P(2.2f), P(4.4f), P(4.4f));
+            float mx = cx + (float)Math.Sin(angle) * mr;
+            float my = cy - (float)Math.Cos(angle) * mr;
+            Color lamp = main.Muted ? Color.FromArgb(110, 110, 116) : Mix(fillB, Color.White, 0.15);
+            if (!main.Muted)
+                for (int i = 4; i >= 1; i--)
+                {
+                    float gr = P(2.2f + i * 1.6f);
+                    using (var br = new SolidBrush(Color.FromArgb(22, fillB))) g.FillEllipse(br, mx - gr, my - gr, gr * 2, gr * 2);
+                }
+            using (var br = new SolidBrush(lamp))
+                g.FillEllipse(br, mx - P(2.4f), my - P(2.4f), P(4.8f), P(4.8f));
 
             if (p.HoverT > 0.01f)
                 using (var br = new SolidBrush(Color.FromArgb((int)(10 * p.HoverT), 255, 255, 255))) g.FillEllipse(br, r);
@@ -1032,6 +1069,24 @@ namespace KomorebiTray
                 DeleteDC(memDc);
                 ReleaseDC(IntPtr.Zero, screenDc);
             }
+        }
+
+        // Text goes on the opaque pills, so ClearType works; it is drawn on whole pixels without the
+        // half-pixel offset the shapes use, which would otherwise smear small text.
+        static void Text(Graphics g, string text, Font f, Brush br, RectangleF r, StringFormat sf)
+        {
+            var mode = g.PixelOffsetMode;
+            g.PixelOffsetMode = PixelOffsetMode.None;
+            var e = g.Transform.Elements;
+            bool plain = Math.Abs(e[0] - 1) < 0.0001f && Math.Abs(e[3] - 1) < 0.0001f;
+            if (plain)
+            {
+                // Snap to device pixels (the transform only translates once the entrance has finished)
+                float x = (float)Math.Round(r.X + e[4]) - e[4], y = (float)Math.Round(r.Y + e[5]) - e[5];
+                r = new RectangleF(x, y, (float)Math.Round(r.Width), (float)Math.Round(r.Height));
+            }
+            g.DrawString(text, f, br, r, sf);
+            g.PixelOffsetMode = mode;
         }
 
         static GraphicsPath Rounded(RectangleF r, float radius)
@@ -1063,6 +1118,8 @@ namespace KomorebiTray
             return null;
         }
 
+        static PointF Centre(RectangleF r) { return new PointF(r.X + r.Width / 2, r.Y + r.Height / 2); }
+
         float TrackValue(Part p, int x)
         {
             float inset = P(3);
@@ -1077,9 +1134,17 @@ namespace KomorebiTray
             {
                 if (drag.Kind == PartKind.Knob)
                 {
-                    // Up or right turns it up; 220px of travel is the full range
-                    float delta = ((e.X - dragStart.X) - (e.Y - dragStart.Y)) / P(220);
-                    drag.Set(Round2(dragStartValue + delta));
+                    // Turn it like a real knob: the change in angle around its centre moves the level.
+                    // Clockwise turns it up; the 270° sweep of the marker is the full range.
+                    var c = Centre(drag.Rect);
+                    float dx = e.X - c.X, dy = e.Y - c.Y;
+                    if (dx * dx + dy * dy < P(5) * P(5)) return;   // too close to the centre to read a direction
+                    double a = Math.Atan2(dy, dx), d = a - dragAngle;
+                    if (d > Math.PI) d -= 2 * Math.PI;
+                    if (d < -Math.PI) d += 2 * Math.PI;
+                    dragAngle = a;
+                    knobValue = Math.Max(0, Math.Min(1, knobValue + (float)(d / (1.5 * Math.PI))));
+                    drag.Set(Round2(knobValue));
                 }
                 else drag.Set(Round2(TrackValue(drag, e.X)));
                 Kick();
@@ -1107,7 +1172,10 @@ namespace KomorebiTray
                 case PartKind.MuteButton:
                 case PartKind.AppButton: drag = p; p.ToggleMute(); Kick(); return;
                 case PartKind.Knob:
-                    drag = p; dragStart = e.Location; dragStartValue = p.Value; Capture = true; Kick(); return;
+                    {
+                        var c = Centre(p.Rect);
+                        drag = p; dragAngle = Math.Atan2(e.Y - c.Y, e.X - c.X); knobValue = p.Value; Capture = true; Kick(); return;
+                    }
                 default:
                     drag = p; Capture = true; p.Set(Round2(TrackValue(p, e.X))); Kick(); return;
             }

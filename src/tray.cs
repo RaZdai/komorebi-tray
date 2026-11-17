@@ -2049,7 +2049,6 @@ namespace KomorebiTray
                 S("Behaviour", "bool", "Pause shortcuts in fullscreen", "Games and fullscreen video keep every key", "tray." + TrayApp.PauseInFullscreenKey, true),
 
                 S("Volume mixer", "bool", "Show quiet apps", "Include apps with an open but silent audio stream", "tray." + MixerFlyout.PrefInactive, true),
-                E("Volume mixer", "Fill colour", "Colour of the level in the display", "tray." + MixerFlyout.PrefColour, "Ice", MixerFlyout.Colours),
             };
 
             var monitors = Json.Get(cfg, "monitors") as System.Collections.IList;
