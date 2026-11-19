@@ -23,15 +23,15 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("komorebi-tray setup")]
 [assembly: AssemblyProduct("komorebi-tray")]
-[assembly: AssemblyVersion("1.5.1.0")]
-[assembly: AssemblyFileVersion("1.5.1.0")]
+[assembly: AssemblyVersion("1.6.0.0")]
+[assembly: AssemblyFileVersion("1.6.0.0")]
 
 namespace KomorebiTraySetup
 {
     static class Product
     {
         public const string Name = "komorebi-tray";
-        public const string Version = "1.5.1";
+        public const string Version = "1.6.0";
         public const string Publisher = "komorebi-tray contributors";
         public const string Url = "https://github.com/LGUG2Z/komorebi";
         public const string ElevatedTask = "komorebi (elevated)";
@@ -181,29 +181,17 @@ namespace KomorebiTraySetup
             finally { Marshal.FinalReleaseComObject(shell); }
         }
 
-        // Adds "keys : command" to a whkdrc unless the feature already has a binding (marker in a command) or the
-        // keys are taken. Goes right after the line containing `after` when there is one, else at the end.
-        public static void AddBinding(string whkdrc, string keys, string command, string marker, string after)
+        // Drops the keybinds whose command contains `marker` (features that no longer exist) from a whkdrc
+        public static void RemoveBinding(string whkdrc, string marker)
         {
             try
             {
                 if (!File.Exists(whkdrc)) return;
                 var lines = new List<string>(File.ReadAllLines(whkdrc));
-                int at = -1;
-                for (int i = 0; i < lines.Count; i++)
-                {
-                    string l = lines[i].Trim();
-                    if (l.StartsWith("#") || l.IndexOf(':') < 0) continue;
-                    string k = System.Text.RegularExpressions.Regex.Replace(l.Substring(0, l.IndexOf(':')).Trim().ToLowerInvariant(), @"\s*\+\s*", " + ");
-                    string cmd = l.Substring(l.IndexOf(':') + 1);
-                    if (cmd.Contains(marker) || k == keys) return;
-                    if (after != null && cmd.Contains(after)) at = i + 1;
-                }
-                string line = keys.PadRight(26) + ": " + command;
-                if (at >= 0) lines.Insert(at, line); else lines.Add(line);
-                File.WriteAllText(whkdrc, string.Join("\r\n", lines.ToArray()) + "\r\n", new System.Text.UTF8Encoding(false));
+                int n = lines.RemoveAll(l => !l.TrimStart().StartsWith("#") && l.IndexOf(':') >= 0 && l.Substring(l.IndexOf(':') + 1).Contains(marker));
+                if (n > 0) File.WriteAllText(whkdrc, string.Join("\r\n", lines.ToArray()) + "\r\n", new System.Text.UTF8Encoding(false));
             }
-            catch { }   // a keybind we couldn't add is not worth failing the install over
+            catch { }   // a stale keybind does nothing; not worth failing the install over
         }
 
         public static void WriteResource(string name, string path)
@@ -253,9 +241,9 @@ namespace KomorebiTraySetup
             Sys.WriteResource("komorebi-tray.exe.config", t.Exe + ".config");
             string icon = Path.Combine(t.TrayDir, "komorebi-tray.ico");
             Sys.WriteResource("komorebi-tray.ico", icon);
-            // HeadsetControl (GPL-3.0, github.com/Sapd/HeadsetControl): battery levels of many wired / wireless headsets
-            Sys.WriteResource("headsetcontrol.exe", Path.Combine(t.TrayDir, "headsetcontrol.exe"));
-            Sys.WriteResource("THIRD_PARTY_NOTICES.txt", Path.Combine(t.TrayDir, "THIRD_PARTY_NOTICES.txt"));
+            // Left behind by 1.4.0 - 1.5.1, whose battery readout has been removed
+            foreach (string old in new[] { "headsetcontrol.exe", "THIRD_PARTY_NOTICES.txt" })
+                try { File.Delete(Path.Combine(t.TrayDir, old)); } catch { }
             string self = Application.ExecutablePath;
             if (!string.Equals(Path.GetFullPath(self), Path.GetFullPath(t.Uninstaller), StringComparison.OrdinalIgnoreCase))
                 File.Copy(self, t.Uninstaller, true);
@@ -270,8 +258,8 @@ namespace KomorebiTraySetup
                 if (exists) File.Copy(pair[1], pair[1] + ".before-komorebi-tray-" + stamp, true);
                 Sys.WriteResource(pair[0], pair[1]);
             }
-            // An update keeps the user's own keybinds: give them the shortcuts of new features when the keys are free
-            Sys.AddBinding(t.Whkdrc, "alt + shift + b", "komorebi-tray.exe --batteries", "--batteries", "--volume");
+            // An update keeps the user's own keybinds, minus the Alt+Shift+B batteries key of 1.4.0 - 1.5.1
+            Sys.RemoveBinding(t.Whkdrc, "komorebi-tray.exe --batteries");
 
             report("Adding shortcuts…", 0.65);
             Directory.CreateDirectory(t.Programs);
@@ -581,7 +569,7 @@ namespace KomorebiTraySetup
             Label(g, uninstall ? "Uninstall komorebi-tray" : "komorebi-tray", Theme.Title, Theme.Text, x + P(44), y);
             y += P(44);
             Label(g, uninstall ? "Removes the tray, its shortcuts and its entry in Apps & Features."
-                              : "Omarchy-style tray: keybinds, settings, apps, volume and batteries.", Theme.Small, Theme.Dim, x, y);
+                              : "Omarchy-style tray: keybinds, settings, apps and volume.", Theme.Small, Theme.Dim, x, y);
             y += P(34);
 
             if (!uninstall)
@@ -629,7 +617,7 @@ namespace KomorebiTraySetup
                 {
                     y += P(26);
                     Label(g, "Alt+K  keybinds     Alt+C  settings     Alt+Space  apps", Theme.Small, Theme.Dim, x, y);
-                    Label(g, "Alt+Shift+T  volume     Alt+Shift+B  batteries", Theme.Small, Theme.Dim, x, y + P(20));
+                    Label(g, "Alt+Shift+T  volume", Theme.Small, Theme.Dim, x, y + P(20));
                     Label(g, "Click the tray icon to stop or start everything.", Theme.Small, Theme.Dim, x, y + P(40));
                 }
             }

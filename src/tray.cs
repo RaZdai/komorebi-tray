@@ -14,8 +14,8 @@ using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("komorebi-tray")]
 [assembly: System.Reflection.AssemblyProduct("komorebi-tray")]
-[assembly: System.Reflection.AssemblyVersion("1.5.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.5.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.6.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.6.0.0")]
 
 namespace KomorebiTray
 {
@@ -652,7 +652,6 @@ namespace KomorebiTray
             Add("Session", "Open default web browser", OpenBrowserCommand);
             Add("Session", "Open komorebi settings", OpenSettingsCommand);
             Add("Session", "Open volume mixer", OpenVolumeCommand);
-            Add("Session", "Open batteries", OpenBatteriesCommand);
 
             RunApp = new ActionDef { Group = "Other", Label = "Open an app / run a command", Command = "", FreeText = true, Hint = "e.g.  wt   or   firefox   or   explorer" };
             CustomKomorebic = new ActionDef { Group = "Other", Label = "Other komorebic command", Command = "komorebic", FreeText = true, Hint = "e.g.  toggle-tiling" };
@@ -676,7 +675,6 @@ namespace KomorebiTray
         public static string OpenBrowserCommand { get { return OpenEditorCommand.Replace(" --shortcuts", " --browser"); } }
         public static string OpenSettingsCommand { get { return OpenEditorCommand.Replace(" --shortcuts", " --settings"); } }
         public static string OpenVolumeCommand { get { return OpenEditorCommand.Replace(" --shortcuts", " --volume"); } }
-        public static string OpenBatteriesCommand { get { return OpenEditorCommand.Replace(" --shortcuts", " --batteries"); } }
 
         public static ActionDef Match(string cmd, out int option, out string text)
         {
@@ -690,8 +688,7 @@ namespace KomorebiTray
                     || (a.Label == "Search apps (launcher)" && c.Contains("komorebi-tray") && c.Contains("--apps"))
                     || (a.Label == "Open default web browser" && c.Contains("komorebi-tray") && c.Contains("--browser"))
                     || (a.Label == "Open komorebi settings" && c.Contains("komorebi-tray") && c.Contains("--settings"))
-                    || (a.Label == "Open volume mixer" && c.Contains("komorebi-tray") && c.Contains("--volume"))
-                    || (a.Label == "Open batteries" && c.Contains("komorebi-tray") && c.Contains("--batteries"))) return a; continue; }
+                    || (a.Label == "Open volume mixer" && c.Contains("komorebi-tray") && c.Contains("--volume"))) return a; continue; }
                 for (int i = 0; i < a.Values.Length; i++)
                     if (string.Equals(c, a.Command + " " + a.Values[i], StringComparison.OrdinalIgnoreCase)) { option = i; return a; }
             }
@@ -1874,7 +1871,7 @@ namespace KomorebiTray
         public const string FollowKey = "border_follows_accent";
         const string BeforeKey = "border_colour_before_accent", ColourPath = "border_colours.single";
 
-        // komorebi-tray.json is written from the UI thread and the battery thread: one lock around every read and write
+        // komorebi-tray.json is written from more than one place: one lock around every read and write
         static readonly object prefsLock = new object();
 
         public static Dictionary<string, object> LoadPrefs()
@@ -2041,7 +2038,7 @@ namespace KomorebiTray
 
     static class SettingCatalog
     {
-        public static readonly string[] Sections = { "Gaps", "Borders", "Transparency", "Animation", "Behaviour", "Volume mixer", "Batteries", "Workspaces" };
+        public static readonly string[] Sections = { "Gaps", "Borders", "Transparency", "Animation", "Behaviour", "Volume mixer", "Workspaces" };
 
         static readonly string[] Easings = {
             "Linear", "EaseInSine", "EaseOutSine", "EaseInOutSine", "EaseInQuad", "EaseOutQuad", "EaseInOutQuad",
@@ -2105,11 +2102,6 @@ namespace KomorebiTray
 
                 S("Volume mixer", "bool", "Show quiet apps", "Include apps with an open but silent audio stream", "tray." + MixerFlyout.PrefInactive, true),
 
-                E("Batteries", "Show levels", "Taskbar, numbers in the notification area, or hidden", "tray." + BatteryPrefs.Display, BatteryPrefs.Taskbar, BatteryPrefs.DisplayOptions),
-                S("Batteries", "bool", "Background behind taskbar text", "For taskbars made transparent by a theme", "tray." + BatteryPrefs.Background, false),
-                S("Batteries", "bool", "Hide last known / asleep devices", "Only devices with a current reading", "tray." + BatteryPrefs.HideLastKnown, false),
-                S("Batteries", "bool", "Low battery warning", "A notification when a device runs low", "tray." + BatteryPrefs.Warn, true),
-                N("Batteries", "Low at", "Level that counts as low (shown in red)", "tray." + BatteryPrefs.Low, 15, 5, 50, 5, "%"),
             };
 
             var monitors = Json.Get(cfg, "monitors") as System.Collections.IList;
@@ -2457,7 +2449,7 @@ namespace KomorebiTray
             if (loadError != null) return;   // never overwrite a file we couldn't read
             try
             {
-                // komorebi-tray.json is also written by the battery readout while this window is open:
+                // komorebi-tray.json can also change while this window is open (Claude pause marker, mixer):
                 // start from the file as it is now and put only this window's changes on top
                 AccentBorder.UpdatePrefs(disk =>
                 {
@@ -3318,12 +3310,10 @@ namespace KomorebiTray
         KeybindEditor editor;
         AppLauncher apps;
         SettingsEditor settingsWin;
-        BatteryTray batteries;
-        BatteryWindow batteryWin;
         bool stopped, quitting;
         readonly List<DateTime> crashes = new List<DateTime>();
         readonly Control invoker = new Control();
-        EventWaitHandle openSignal, appsSignal, toggleSignal, diagSignal, settingsSignal, volumeSignal, batteriesSignal;
+        EventWaitHandle openSignal, appsSignal, toggleSignal, diagSignal, settingsSignal, volumeSignal;
 
         public TrayApp(bool openShortcuts, bool openApps)
         {
@@ -3337,7 +3327,6 @@ namespace KomorebiTray
                 diagSignal = Listen(Program.DiagnosticsEvent, SaveDiagnostics);
                 settingsSignal = Listen(Program.SettingsEvent, ToggleSettings);
                 volumeSignal = Listen(Program.VolumeEvent, ToggleVolume);
-                batteriesSignal = Listen(Program.BatteriesEvent, ToggleBatteries);
             }
             catch (Exception ex) { Log.Write("signal: " + ex.Message); }
 
@@ -3367,9 +3356,6 @@ namespace KomorebiTray
             appsItem = menu.Items.Add("Apps…", null, (s, e) => ToggleApps());
             // Not tied to komorebi, so it stays usable while tiling is stopped
             menu.Items.Add("Volume mixer", null, (s, e) => MixerFlyout.Toggle(tray, false));   // under the tray icon
-            // Battery levels of wireless devices (battery.cs, battery-ui.cs); also independent of komorebi
-            menu.Items.Add("Batteries…", null, (s, e) => ToggleBatteries());
-            batteries = new BatteryTray(invoker, tray, ToggleBatteries);
             menu.Items.Add("Save diagnostics", null, (s, e) => SaveDiagnostics());
             menu.Items.Add("Open config folder", null, (s, e) => Run.Shell("explorer.exe", "\"" + Paths.ConfigDir + "\""));
             menu.Items.Add(new ToolStripSeparator());
@@ -3384,7 +3370,6 @@ namespace KomorebiTray
                 Run.K("stop", 5000);
                 WaitForKomorebiExit();
                 WindowFixer.ClearKomorebiTransparency();
-                batteries.Dispose();
                 tray.Visible = false;
                 ExitThread();
             });
@@ -3511,7 +3496,6 @@ namespace KomorebiTray
                 else if (c.Contains("--browser")) Run.OpenDefaultBrowser();
                 else if (c.Contains("--settings")) ToggleSettings();
                 else if (c.Contains("--volume")) ToggleVolume();
-                else if (c.Contains("--batteries")) ToggleBatteries();
                 return;
             }
             if (c.Contains("taskkill") && c.Contains("whkd")) { ReloadHotkeys(); return; }   // old "restart whkd" binding
@@ -3523,20 +3507,6 @@ namespace KomorebiTray
         // The volume mixer flyout (mixer.cs), centred under this tray icon
         // From the shortcut (or --volume): top centre of the monitor under the mouse
         void ToggleVolume() { MixerFlyout.Toggle(tray, true); }
-
-        // Alt+Shift+B (or Batteries… in the menu, or a click on the taskbar readout): every device's level and the
-        // battery settings. Works while tiling is stopped too, like the volume mixer.
-        void ToggleBatteries()
-        {
-            if (batteryWin != null) { batteryWin.Close(); return; }
-            if (batteries == null) return;
-            Theme.Refresh();
-            batteries.LoadPrefs();   // picks up komorebi-tray.json edited by hand or by a script
-            batteryWin = new BatteryWindow(batteries);
-            batteryWin.FormClosed += (s, e) => { batteryWin.Dispose(); batteryWin = null; Native.Trim(); };
-            batteryWin.Show();
-            batteryWin.Activate();
-        }
 
         // ---- stop / start everything
 
@@ -3805,7 +3775,6 @@ namespace KomorebiTray
                 // The settings window already saved and had komorebi reload; just confirm it
                 if (saved && !stopped) tray.ShowBalloonTip(1500, "komorebi", "Settings applied", ToolTipIcon.Info);
                 WatchFullscreen();      // picks up the "Pause shortcuts in fullscreen" switch
-                if (batteries != null) batteries.LoadPrefs();   // battery icons / low-battery switches
                 Native.Trim();
             };
             settingsWin.Show();
@@ -3864,10 +3833,9 @@ namespace KomorebiTray
                 hotkeys.Clear();
                 hotkeys.DestroyHandle();
                 Unwatch();
-                if (batteries != null) batteries.Dispose();
                 tray.Dispose(); menu.Dispose(); invoker.Dispose();
                 TrayIcons.Release();
-                foreach (var ev in new[] { openSignal, appsSignal, toggleSignal, diagSignal, settingsSignal, volumeSignal, batteriesSignal }) if (ev != null) ev.Dispose();
+                foreach (var ev in new[] { openSignal, appsSignal, toggleSignal, diagSignal, settingsSignal, volumeSignal }) if (ev != null) ev.Dispose();
             }
             base.Dispose(disposing);
         }
@@ -3881,22 +3849,18 @@ namespace KomorebiTray
         public const string DiagnosticsEvent = @"Local\KomorebiTrayDiagnostics";
         public const string SettingsEvent = @"Local\KomorebiTraySettings";
         public const string VolumeEvent = @"Local\KomorebiTrayVolume";
-        public const string BatteriesEvent = @"Local\KomorebiTrayBatteries";
-        public const string Version = "1.5.1";
+        public const string Version = "1.6.0";
 
         [STAThread]
         static void Main(string[] args)
         {
             if (Array.IndexOf(args, "--browser") >= 0) { Run.OpenDefaultBrowser(); return; }
-            if (Array.IndexOf(args, "--battery-list") >= 0) { BatteryMonitor.PrintList(); return; }
-            if (Array.IndexOf(args, "--battery-dump") >= 0) { BatteryMonitor.PrintDump(); return; }
             bool openShortcuts = Array.IndexOf(args, "--shortcuts") >= 0;
             bool openApps = Array.IndexOf(args, "--apps") >= 0;
             bool togglePause = Array.IndexOf(args, "--toggle-pause") >= 0;
             bool diagnostics = Array.IndexOf(args, "--diagnostics") >= 0;
             bool openSettings = Array.IndexOf(args, "--settings") >= 0;
             bool openVolume = Array.IndexOf(args, "--volume") >= 0;
-            bool openBatteries = Array.IndexOf(args, "--batteries") >= 0;
             bool created;
             using (var mutex = new Mutex(true, "KomorebiTrayController", out created))
             {
@@ -3905,7 +3869,7 @@ namespace KomorebiTray
                     // Tray already running: hand the request to it
                     // This process got the keypress, so it may hand foreground rights to the tray
                     // --toggle-pause does the same as the tray's Pause/Resume item (handy for scripts)
-                    string ev = openBatteries ? BatteriesEvent : openVolume ? VolumeEvent : openSettings ? SettingsEvent : diagnostics ? DiagnosticsEvent : togglePause ? TogglePauseEvent : openApps ? OpenAppsEvent : openShortcuts ? OpenShortcutsEvent : null;
+                    string ev = openVolume ? VolumeEvent : openSettings ? SettingsEvent : diagnostics ? DiagnosticsEvent : togglePause ? TogglePauseEvent : openApps ? OpenAppsEvent : openShortcuts ? OpenShortcutsEvent : null;
                     if (ev != null)
                         try
                         {

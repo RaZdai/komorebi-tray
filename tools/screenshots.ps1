@@ -1,6 +1,6 @@
 # Takes the README screenshots: each menu of the running tray in its default orange, on a plain backdrop.
 #   powershell -ExecutionPolicy Bypass -File tools\screenshots.ps1 [-OutDir docs\screenshots]
-# The tray must be running. Only komorebi-tray's own windows (and the taskbar strip around its battery readout)
+# The tray must be running. Only komorebi-tray's own windows
 # are captured; keys are posted to those windows only, nothing is typed globally. "Match Windows accent" is
 # switched off for the run so the menus use the default orange, and put back afterwards.
 param([string]$OutDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'docs\screenshots'))
@@ -101,30 +101,12 @@ function SetPref([string]$key, $json) {
 }
 function if2($c, $a, $b) { if ($c) { $a } else { $b } }
 
-# The defaults for the run: orange menus, battery warning on at 15 %
+# The defaults for the run: orange menus
 $restore = @{}
 
 $backdrop = $null
 try {
     $restore['border_follows_accent'] = SetPref 'border_follows_accent' 'false'
-    $restore['battery_warn'] = SetPref 'battery_warn' 'true'
-    $restore['battery_low'] = SetPref 'battery_low' '15'
-    $restore['battery_display'] = SetPref 'battery_display' '"Taskbar"'
-    Start-Process $exe -ArgumentList '--batteries'; Start-Sleep 1; Start-Process $exe -ArgumentList '--batteries'; Start-Sleep 0.8   # reload the battery settings
-
-    # The battery readout on the taskbar, before the backdrop covers the screen
-    Write-Host 'taskbar'
-    $tb = [Shot]::FindWindow('Shell_TrayWnd', [NullString]::Value)
-    $strip = [Shot]::FindWindowEx($tb, [IntPtr]::Zero, [NullString]::Value, 'komorebi-tray batteries')
-    if ($strip -ne [IntPtr]::Zero -and [Shot]::IsWindowVisible($strip)) {
-        $sr = New-Object Shot+RECT; [Shot]::GetWindowRect($strip, [ref]$sr) | Out-Null
-        $tr = New-Object Shot+RECT; [Shot]::GetWindowRect($tb, [ref]$tr) | Out-Null
-        $x = [Math]::Max($tr.L, $sr.L - 24); $w = [Math]::Min($tr.R, $x + 520) - $x
-        $bmp = New-Object Drawing.Bitmap $w, ($tr.B - $tr.T)
-        $g = [Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($x, $tr.T, 0, 0, $bmp.Size); $g.Dispose()
-        $bmp.Save((Join-Path $OutDir 'taskbar-batteries.png'), [Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
-        Write-Host '  taskbar-batteries.png'
-    }
 
     # A plain backdrop behind the menus (same gradient as the earlier screenshots)
     $backdrop = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', @'
@@ -148,17 +130,12 @@ $f.Add_Paint({ param($s, $e) $b = New-Object Drawing.Drawing2D.LinearGradientBru
     $h = Open '--settings' "komorebi $dot Settings"
     Key $h 0x22 1; Grab $h 'settings-borders.png'
     Key $h 0x22 2; Grab $h 'settings-animation.png'
-    Key $h 0x28 3; Key $h 0x0D; Grab $h 'settings-picker.png'; Key $h 0x1B
-    Key $h 0x22 3; Grab $h 'settings-batteries.png'; Close $h
+    Key $h 0x28 3; Key $h 0x0D; Grab $h 'settings-picker.png'; Key $h 0x1B; Close $h
 
     Write-Host 'volume mixer'
     Start-Process $exe -ArgumentList '--volume'; Start-Sleep 1
     $h = [Shot]::Biggest([uint32]$tray.Id); Grab $h 'volume-mixer.png'
     Start-Process $exe -ArgumentList '--volume'; Start-Sleep 0.6
-
-    Write-Host 'batteries'
-    $h = Open '--batteries' "komorebi $dot Batteries"; Grab $h 'batteries.png'
-    Key $h 0x52; Start-Sleep 9; $h = Find "komorebi $dot Batteries"; Grab $h 'batteries-search.png'; Close $h
 
     $setup = Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\komorebi-tray-setup.exe'
     if (Test-Path $setup) {
@@ -181,5 +158,4 @@ finally {
     if ($backdrop -and -not $backdrop.HasExited) { $backdrop.Kill() }
     # Put the user's own values back, key by key (the tray may have written other keys meanwhile)
     foreach ($k in $restore.Keys) { SetPref $k $restore[$k] | Out-Null }
-    Start-Process $exe -ArgumentList '--batteries'; Start-Sleep 1; Start-Process $exe -ArgumentList '--batteries'   # reload them
 }
