@@ -169,4 +169,4 @@ The tray idles at around 15 MB of memory and close to no CPU: it waits on Window
 
 ## License
 
-komorebi-tray's own code is released under the [MIT License](LICENSE). That covers only the code in this repository; komorebi and whkd keep their own licenses.
+komorebi-tray's own code is released under the [MIT License](LICENSE). That covers only the code in this repository. komorebi-tray works with, but does not contain, [komorebi](https://github.com/LGUG2Z/komorebi), which is licensed separately under the [Komorebi License](https://github.com/LGUG2Z/komorebi/blob/master/LICENSE.md) by LGUG2Z; whkd keeps its own license too.
